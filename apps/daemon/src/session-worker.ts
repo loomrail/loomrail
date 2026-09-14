@@ -1,4 +1,10 @@
-import type { ProviderId, WorkflowDispatch, WorkflowStage, WorkflowTemplate } from "@loomrail/contracts";
+import type {
+  EventSignal,
+  ProviderId,
+  WorkflowDispatch,
+  WorkflowStage,
+  WorkflowTemplate,
+} from "@loomrail/contracts";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter } from "@loomrail/provider-core";
 import {
@@ -60,6 +66,16 @@ export type SessionWorkerDeps = {
   projectVerification?: ProjectVerificationWorkflowGate;
   /** Validated once at construction; persistence repeats the resolved limits in every claim. */
   schedulingLimits?: SchedulerLimits;
+  /**
+   * The raw event-channel publisher, handed straight to `runStageAttempt`.
+   *
+   * The activity feed is not an Event, so the `broadcastingState` seam every other writer publishes
+   * through never fires for it and the session loop has to signal directly. See its own comment on
+   * `RunStageAttemptDeps.publishSignal`.
+   */
+  publishSignal?: (signal: EventSignal) => void;
+  /** Values the session loop must keep out of recorded provider activity; handed straight through. */
+  redactValues?: readonly string[];
 };
 
 /**
@@ -238,6 +254,8 @@ export const createSessionWorker = (deps: SessionWorkerDeps): SessionWorker => {
         ...(deps.createWorkspaceTools === undefined
           ? {}
           : { createWorkspaceTools: deps.createWorkspaceTools }),
+        ...(deps.publishSignal === undefined ? {} : { publishSignal: deps.publishSignal }),
+        ...(deps.redactValues === undefined ? {} : { redactValues: deps.redactValues }),
         onSessionLive: (providerSessionId) => {
           execution.providerSessionId = providerSessionId;
         },

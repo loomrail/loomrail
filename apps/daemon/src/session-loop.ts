@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { access, constants, mkdir, realpath } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { assembleContextPack, stageContextTokenCaps } from "@loomrail/context-assembly";
 import {
@@ -7,6 +8,7 @@ import {
   contextPackRecipeInputSchema,
   contextWindowUsageSchema,
   maxCarriedPaths,
+  providerActivityEntrySchema,
   providerSessionProcessPidSchema,
   providerAllowanceSnapshotSchema,
   providerUsageSchema,
@@ -15,8 +17,10 @@ import {
   type CheckpointDraft,
   type ContextPackSpec,
   type EndProviderSessionCommand,
+  type EventSignal,
   type HumanRequestDraft,
   type McpSessionSnapshot,
+  type ProviderActivityEntry,
   type ProviderOutcome,
   type ProviderSessionEndReason,
   type ProviderUsage,
@@ -42,9 +46,12 @@ import {
   type ProvisionRefusalCause,
 } from "@loomrail/domain";
 import { StateStoreError, type LocalState } from "@loomrail/persistence-sqlite";
+import { sanitizeSupervisedOutput } from "@loomrail/process-supervision";
 import {
+  boundActivityText,
   ProviderPackTooLargeError,
   providerTokenBudgetSchema,
+  type BoundedActivityText,
   type ProviderAdapter,
   type ProviderMcpConnection,
   type ProviderSessionListener,
@@ -100,7 +107,129 @@ const PACK_SHARE_BACKOFF = 0.1;
  */
 const BYTES_PER_TOKEN = 4;
 
+// How long the recorder lets entries accumulate before writing them. Long enough that a burst of
+// tool calls becomes a handful of writes instead of one per line; short enough that the owner
+// watching a live run sees the feed move.
+const ACTIVITY_DRAIN_INTERVAL_MS = 250;
+
+/**
+ * The queue is a buffer, not a backlog: a provider that outruns the drain by this much is losing
+ * entries, and the feed says so rather than letting a long session grow this array unboundedly.
+ *
+ * Exported so the test that exercises the bound names the same number the recorder enforces
+ * instead of a copy of it that could drift.
+ */
+export const ACTIVITY_QUEUE_LIMIT = 500;
+
+// At most one signal per interval. The activity feed is not an Event, so `broadcastingState` never
+// publishes for it and this loop signals directly -- and a chatty run would otherwise turn one
+// agent into a stream of frames for every open browser tab.
+const ACTIVITY_SIGNAL_DEBOUNCE_MS = 250;
+
+// The contract's own bounds (`providerActivityEntrySchema`). Restated here because redaction can
+// make a string LONGER than the parser left it -- a six-character secret becomes "[REDACTED]" --
+// and an entry that outgrew its bound would be rejected by the write it was about to make.
+const ACTIVITY_LABEL_LIMIT = 500;
+const ACTIVITY_DETAIL_LIMIT = 2_000;
+const ACTIVITY_STATUS_LIMIT = 120;
+
+// What a reported path becomes when it does not resolve inside the worktree. SD-003: an absolute
+// personal path is exactly what must not be persisted, and a provider is free to name one.
+const OUTSIDE_WORKSPACE_MARKER = "[path outside workspace]";
+
 const isAuthorityRevoked = (signal: AbortSignal): boolean => signal.aborted;
+
+/**
+ * One provider-reported path, expressed relative to the worktree it claims to have changed.
+ *
+ * Purely lexical: this runs while the provider's stdout handler waits, so it must not touch the
+ * filesystem, and a display feed does not need symlink resolution to be useful. Anything that
+ * normalises outside the worktree -- or any absolute path at all, when this session has no worktree
+ * -- becomes an opaque marker. It lives here rather than in an adapter because an adapter does not
+ * know where the worktree is.
+ */
+const relativeToWorkspace = (value: string, workspacePath: string | null): string => {
+  if (workspacePath === null) return isAbsolute(value) ? OUTSIDE_WORKSPACE_MARKER : value;
+  const target = relative(workspacePath, resolve(workspacePath, value));
+  if (target === "") return ".";
+  if (isAbsolute(target) || target === ".." || target.startsWith(`..${sep}`)) {
+    return OUTSIDE_WORKSPACE_MARKER;
+  }
+  // Posix separators in the record, whatever the host uses, so one work item's feed reads the same
+  // on every machine that later opens the same database.
+  return target.split(sep).join("/");
+};
+
+// A FILE_CHANGE entry names one path in `label` and, when a single action touched several, the rest
+// as a comma-joined list in `detail` (see `parseCodexActivity`). Each element is normalised on its
+// own; a path that itself contains a comma is split into pieces that each normalise to themselves,
+// so the worst case is two markers instead of one rather than a whole list condemned by one member.
+const relativeWorkspacePaths = (value: string, workspacePath: string | null): string =>
+  value
+    .split(",")
+    .map((candidate) => candidate.trim())
+    .filter((candidate) => candidate.length > 0)
+    .map((candidate) => relativeToWorkspace(candidate, workspacePath))
+    .join(", ");
+
+const cleanActivityText = (
+  value: string | null,
+  limit: number,
+  redactValues: readonly string[],
+): BoundedActivityText =>
+  value === null
+    ? { text: null, truncated: false }
+    : boundActivityText(sanitizeSupervisedOutput(value, redactValues), limit);
+
+/**
+ * Everything a provider-reported entry must pass through before it may be written.
+ *
+ * Paths are normalised BEFORE redaction, not after: the redaction set contains the worktree and the
+ * workspaces root, so redacting first would turn `<worktree>/src/a.ts` into `[REDACTED]/src/a.ts`
+ * and leave nothing for normalisation to recognise. Afterwards, the same redaction still catches an
+ * absolute path quoted inside ordinary prose or a command line, where there is no path to normalise.
+ *
+ * `actionKey` is deliberately untouched: it is the correlation key between an action's start and its
+ * completion, and truncating two distinct long ids to a shared prefix would merge two different
+ * actions into one row. An over-long key is rejected by validation instead.
+ */
+const sanitizeActivityEntry = (
+  entry: ProviderActivityEntry,
+  redactValues: readonly string[],
+  workspacePath: string | null,
+): ProviderActivityEntry => {
+  const normalized = (value: string | null): string | null =>
+    value === null || entry.kind !== "FILE_CHANGE" ? value : relativeWorkspacePaths(value, workspacePath);
+  const label = cleanActivityText(normalized(entry.label), ACTIVITY_LABEL_LIMIT, redactValues);
+  const detail = cleanActivityText(normalized(entry.detail), ACTIVITY_DETAIL_LIMIT, redactValues);
+  const status = cleanActivityText(entry.status, ACTIVITY_STATUS_LIMIT, redactValues);
+  return {
+    ...entry,
+    label: label.text,
+    detail: detail.text,
+    status: status.text,
+    // Never cleared, only set: the parser may already have cut this entry before the recorder saw
+    // it, and a reader must not mistake a fragment for the whole thing.
+    truncated: entry.truncated || label.truncated || detail.truncated || status.truncated,
+  };
+};
+
+/**
+ * A command id for one activity write, derived from the whole entry rather than from its key.
+ *
+ * `commandId` is an `opaqueIdSchema` -- 128 characters of a restricted alphabet -- while `actionKey`
+ * is up to 200 characters of arbitrary provider text, so embedding the key verbatim would make a
+ * perfectly ordinary action unwritable. Hashing the entry rather than the key alone also matters:
+ * the store rejects a command id reused with DIFFERENT input, and an action reports twice (a start
+ * and its completion, or a status that changed), so a key-only id would turn the second report into
+ * a rejection. Identical input still replays from its receipt, which is what makes a retried drain
+ * write once.
+ */
+const activityCommandId = (providerSessionId: string, entry: ProviderActivityEntry): string =>
+  `activity-${createHash("sha256")
+    .update(JSON.stringify({ providerSessionId, entry }))
+    .digest("hex")
+    .slice(0, 48)}`;
 
 export type SessionLoopLogger = {
   info: (details: Record<string, string | number>, message: string) => void;
@@ -162,6 +291,21 @@ export type RunStageAttemptDeps = {
    * one that is. Optional and side-effect free, like `scheduleHandoffDeadline` above it.
    */
   onSessionLive?: (providerSessionId: string | null) => void;
+  /**
+   * The raw event-channel publisher -- the same `publish` `broadcastingState` is given.
+   *
+   * Handed in directly because the activity feed is NOT an Event: nothing is appended to the
+   * append-only vocabulary when an entry is recorded, so the seam every other writer publishes
+   * through without knowing it will never publish for this one. The frame stays the contract's
+   * three opaque identifiers; the client learns that something changed at a scope and refetches.
+   */
+  publishSignal?: (signal: EventSignal) => void;
+  /**
+   * Values that must never survive into a recorded activity entry -- the same set the workspace
+   * executor derives for the output it records (`secretRedactions`, @loomrail/workspace-executor).
+   * Absent means no redaction beyond this session's own worktree path, which is added below.
+   */
+  redactValues?: readonly string[];
 };
 
 const defaultScheduleHandoffDeadline: ScheduleHandoffDeadline = (delayMs, onDeadline) => {
@@ -1378,6 +1522,17 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
       reportedPercents: new Set<number>(),
+      // The recorder's buffer and its verdict on the feed. Held with the rest of the session's
+      // mutable state for the same reason: `onActivity` fills the queue from inside the adapter's
+      // stdout handler while the drain below empties it from a timer.
+      activityQueue: [] as ProviderActivityEntry[],
+      activityDegraded: false,
+      // Held here rather than as captured `let`s for a second reason as well: TypeScript narrows a
+      // `let` to its initializer inside the scope that declares it and does not widen it again for
+      // an assignment made from a closure, so the session-end read of the timer below would be
+      // typed `null` however often the scheduler had set it.
+      activityDegradedWritten: false,
+      activityDrainTimer: null as NodeJS.Timeout | null,
     };
     let lastPublished: CheckpointDraft | null = null;
     let deadline: HandoffDeadline | undefined;
@@ -1411,6 +1566,145 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         );
         return false;
       }
+    };
+
+    // Everything below is the activity recorder (spec §Надёжность). It is strictly best-effort:
+    // `onActivity` runs inside the adapter's stdout handler, where `process-runner`'s `guarded`
+    // helper turns a throw into a stopped child and a failed session. Losing a diagnostic is the
+    // correct outcome; killing the run it was diagnosing is not. So the callback validates,
+    // redacts and enqueues, and nothing here touches the database on that path.
+    //
+    // This session's own worktree joins the redaction set, so an absolute path the provider quotes
+    // in a command line or a message is replaced rather than persisted. `sanitizeActivityEntry`
+    // normalises FILE_CHANGE paths before that replacement can hide them.
+    //
+    // The buffer records WHICH live CLI reported an action, and `MOCK` is not one of them. Null
+    // switches the recorder off for this session rather than letting every write fail its payload
+    // parse and mark a feed degraded that was never going to hold anything.
+    const invocationProvider = capabilities.provider === "MOCK" ? null : capabilities.provider;
+    const activityWorkspacePath = invocationWorkspace.workspace?.path ?? null;
+    const activityRedactValues =
+      activityWorkspacePath === null
+        ? (deps.redactValues ?? [])
+        : [...(deps.redactValues ?? []), activityWorkspacePath];
+
+    let activitySignalPending = false;
+    const publishActivitySignal = (): void => {
+      const publishSignal = deps.publishSignal;
+      if (publishSignal === undefined || activitySignalPending) return;
+      activitySignalPending = true;
+      const timer = setTimeout(() => {
+        activitySignalPending = false;
+        try {
+          publishSignal({
+            projectId: deps.dispatch.projectId,
+            aggregateType: "WORK_ITEM",
+            aggregateId: deps.dispatch.workItemId,
+          });
+        } catch (error: unknown) {
+          // A throw from a timer callback is an uncaught exception and would take the daemon down
+          // over a diagnostic. A frame nobody received costs the owner a manual refresh.
+          deps.logger.warn(
+            { providerSessionId: providerSession.id, error: errorName(error) },
+            "The activity signal could not be published; the feed updates on the next read",
+          );
+        }
+      }, ACTIVITY_SIGNAL_DEBOUNCE_MS);
+      // Never keeps the daemon alive: a pending signal about a finished session is not a reason to
+      // stay up. Same rule as the handoff deadline and the drain timer below.
+      timer.unref();
+    };
+
+    const scheduleActivityDrain = (): void => {
+      if (live.activityDrainTimer !== null) return;
+      const timer = setTimeout(() => {
+        live.activityDrainTimer = null;
+        drainActivityQueue();
+      }, ACTIVITY_DRAIN_INTERVAL_MS);
+      // Never keeps the daemon alive: a queued diagnostic is not a reason to stay up. Same rule as
+      // the handoff deadline and the signal timer above.
+      timer.unref();
+      live.activityDrainTimer = timer;
+    };
+
+    // Flags the feed in memory and lets the drain persist the flag. Split this way because the two
+    // callers are on opposite sides of the hot path: `onActivity` must not open a transaction while
+    // the child's stdout waits, and the drain already runs where a write belongs. A drain is
+    // scheduled either way, so the mark reaches the database within one interval at the latest.
+    const degradeActivityFeed = (): void => {
+      if (live.activityDegraded) return;
+      live.activityDegraded = true;
+      scheduleActivityDrain();
+    };
+
+    // Its own short transaction, not a field on the entry write: a write that failed has already
+    // rolled back, so it cannot also record its own failure. Best-effort in turn -- a failure here
+    // leaves `activityDegradedWritten` false, so the drain's next pass tries once more.
+    const writeActivityDegraded = (): void => {
+      try {
+        deps.state.execute({
+          schemaVersion: 1,
+          commandId: `activity-degraded-${providerSession.id}`,
+          correlationId: deps.correlationId,
+          actor,
+          type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
+          payload: { agentRunId },
+        });
+        live.activityDegradedWritten = true;
+      } catch (error: unknown) {
+        deps.logger.warn(
+          { providerSessionId: providerSession.id, error: errorName(error) },
+          "The activity feed for this run is degraded and could not be marked so",
+        );
+      }
+    };
+
+    const drainActivityQueue = (): void => {
+      if (invocationProvider === null) return;
+      const provider = invocationProvider;
+      const pending = live.activityQueue.splice(0, live.activityQueue.length);
+      let failed = 0;
+      for (const entry of pending) {
+        try {
+          deps.state.execute({
+            schemaVersion: 1,
+            commandId: activityCommandId(providerSession.id, entry),
+            correlationId: deps.correlationId,
+            actor,
+            type: "RECORD_AGENT_RUN_ACTIVITY",
+            payload: {
+              agentRunId,
+              providerSessionId: providerSession.id,
+              provider,
+              entry,
+            },
+          });
+        } catch {
+          // One failed entry must not abandon the rest of the queue, and must never reach the
+          // caller: this runs on a timer, where a throw is an uncaught exception, and in the
+          // session's `finally`, where it would replace the session's real outcome.
+          failed += 1;
+          live.activityDegraded = true;
+        }
+      }
+      if (failed > 0) {
+        // Once per pass, not once per entry: a provider that outruns a broken write would otherwise
+        // turn one failure into hundreds of log lines.
+        deps.logger.warn(
+          { providerSessionId: providerSession.id, failedCount: failed },
+          "Actions could not be recorded; the activity feed for this run is degraded",
+        );
+      }
+      let changed = pending.length > 0;
+      // Written here rather than only at session end: deferring it would show the owner a live feed
+      // as complete exactly while they are watching it fall behind.
+      if (live.activityDegraded && !live.activityDegradedWritten) {
+        writeActivityDegraded();
+        // A feed that only just became degraded is a change worth a frame even when this pass wrote
+        // no entry -- that is precisely the case where the owner is looking at a feed that stopped.
+        changed = changed || live.activityDegradedWritten;
+      }
+      if (changed) publishActivitySignal();
     };
 
     const listener: ProviderSessionListener = {
@@ -1615,6 +1909,46 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           { providerSessionId: providerSession.id, pid: validated.data },
           "Recorded the process this session is driving",
         );
+      },
+
+      // Runs inside the adapter's stdout handler (`ProviderSessionListener.onActivity`,
+      // @loomrail/provider-core). It validates, redacts and enqueues; the drain above writes. The
+      // whole body is guarded because a throw here does not lose an entry -- `process-runner`'s
+      // `guarded` stops the child and rejects `exited`, so the session the feed was describing
+      // fails. The activity feed has no authority over a session's outcome, and that must remain
+      // true even when the recorder itself is broken.
+      onActivity: (reported) => {
+        if (live.closed || isAuthorityRevoked(authoritySignal) || invocationProvider === null) return;
+        try {
+          // Parsed, never cast: this is untrusted process output, and an entry that does not
+          // satisfy the contract is dropped rather than carried to a write that would reject it.
+          const validated = providerActivityEntrySchema.safeParse(reported);
+          if (!validated.success) {
+            deps.logger.warn(
+              { providerSessionId: providerSession.id },
+              "The provider reported an action that does not satisfy the contract",
+            );
+            return;
+          }
+          // Bounded on purpose: a provider that outruns the drain loses the newest entries rather
+          // than growing this queue without limit inside a long-running daemon. Dropping marks the
+          // feed degraded, which is the honest outcome -- an unbounded queue would trade a visibly
+          // incomplete feed for an invisible memory leak.
+          if (live.activityQueue.length >= ACTIVITY_QUEUE_LIMIT) {
+            degradeActivityFeed();
+            return;
+          }
+          live.activityQueue.push(
+            sanitizeActivityEntry(validated.data, activityRedactValues, activityWorkspacePath),
+          );
+          scheduleActivityDrain();
+        } catch (error: unknown) {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id, error: errorName(error) },
+            "An action could not be queued; the activity feed for this run is degraded",
+          );
+          degradeActivityFeed();
+        }
       },
     };
 
@@ -1986,6 +2320,19 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         return;
       }
     } finally {
+      // The queue's tail would otherwise be lost with the session: the drain timer is unref'd and
+      // about to be cleared, and the next iteration builds a fresh `live` with an empty queue.
+      // Forced once, here, so every exit from the session body -- outcome, deadline, failure,
+      // revoked authority, `continue` -- flushes what the provider reported before it ended.
+      if (live.activityDrainTimer !== null) {
+        clearTimeout(live.activityDrainTimer);
+        live.activityDrainTimer = null;
+      }
+      // This pass is also the backstop for the degraded mark: the drain writes it whenever the flag
+      // is set and unrecorded, which covers a session that degraded with an empty queue as well as
+      // one whose earlier mark write failed. A feed that is incomplete has to say so rather than
+      // look full.
+      drainActivityQueue();
       // Keep the session registered through every awaited internal stop. Owner cancellation must
       // be able to find and await it until either this loop has persisted its terminal state or a
       // revoked loop has handed terminal ownership back to the cancelling boundary.

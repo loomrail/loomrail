@@ -203,6 +203,7 @@ import {
   summariseChanges,
   treeOfWorktree,
 } from "@loomrail/workspace";
+import { secretRedactions } from "@loomrail/workspace-executor";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
@@ -1584,6 +1585,16 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
       artifactsDirectory: workspaceToolArtifactsDirectory,
       processRegistryDirectory: workspaceToolProcessRegistryDirectory,
     }),
+    // The raw publisher, not the `broadcastingState` seam: recording provider activity appends no
+    // Event, so that seam has nothing to publish for it and the session loop signals directly.
+    publishSignal: eventStreams.publish,
+    // The same set the workspace executor redacts with, built here once from the same environment
+    // and the same roots, because the recorder is recording output from the same child processes.
+    redactValues: secretRedactions(process.env, [
+      workspacesRoot,
+      workspaceToolArtifactsDirectory,
+      workspaceToolProcessRegistryDirectory,
+    ]),
   });
   wakeWorkflowAfterVerification = worker.wake;
 
