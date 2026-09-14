@@ -31,11 +31,14 @@ const toolResultBlockSchema = z.object({
 
 const assistantLineSchema = z.object({
   type: z.literal("assistant"),
-  message: z.object({ content: z.array(z.unknown()) }),
+  // Read through the schema, not assumed: see `lineId` below for how these key AGENT_TEXT entries.
+  uuid: z.string().optional(),
+  message: z.object({ id: z.string().optional(), content: z.array(z.unknown()) }),
 });
 
 const userLineSchema = z.object({
   type: z.literal("user"),
+  uuid: z.string().optional(),
   message: z.object({ content: z.array(z.unknown()) }),
 });
 
@@ -56,6 +59,13 @@ const targetOf = (name: string, input: Record<string, unknown> | undefined): str
   return typeof value === "string" ? value : null;
 };
 
+// An empty string is not a usable identifier; treat it the same as the field being absent rather
+// than let it flow into a key.
+const nonEmpty = (value: string | undefined): string | undefined =>
+  value !== undefined && value.length > 0 ? value : undefined;
+
+const MAX_ACTION_KEY_LENGTH = 200;
+
 /**
  * Builds diagnostic activity entries from one line of the `claude` CLI's stream-json output.
  *
@@ -68,7 +78,18 @@ export const parseClaudeActivity = (line: string): readonly ProviderActivityEntr
   if (!parsed.success) return [];
   const entries: ProviderActivityEntry[] = [];
 
-  for (const raw of parsed.data.message.content) {
+  // AGENT_TEXT entries key off this, not off their position in the array: the daemon upserts on
+  // `UNIQUE (provider_session_id, action_key)`, so a key that repeats across lines -- a plain
+  // block-count index does, because every line restarts its count at 0 -- silently merges two
+  // different messages into one stored row instead of producing two. `uuid` is unique per line in
+  // the real stream; `message.id` (assistant lines only) is the fallback for a line that omits it.
+  // If neither is present there is no way to key the text safely, so it is dropped below rather
+  // than merged under a guess.
+  const lineId =
+    nonEmpty(parsed.data.uuid) ??
+    (parsed.data.type === "assistant" ? nonEmpty(parsed.data.message.id) : undefined);
+
+  for (const [blockIndex, raw] of parsed.data.message.content.entries()) {
     const toolUse = toolUseBlockSchema.safeParse(raw);
     if (toolUse.success) {
       const label = boundActivityText(toolUse.data.name, 500);
@@ -104,10 +125,17 @@ export const parseClaudeActivity = (line: string): readonly ProviderActivityEntr
 
     const text = textBlockSchema.safeParse(raw);
     if (text.success) {
+      if (lineId === undefined) continue;
       const detail = boundActivityText(text.data.text, 2_000);
       if (detail.text === null) continue;
+      const actionKey = `${lineId}-text-${blockIndex.toString()}`;
+      // `lineId` falls back to the provider's own `message.id`, which is process output Loomrail
+      // does not bound -- a pathological one could blow the contract's 200-char limit. Truncating
+      // it would risk re-creating the same collision this key exists to prevent, so an over-length
+      // key is dropped rather than cut down.
+      if (actionKey.length > MAX_ACTION_KEY_LENGTH) continue;
       entries.push({
-        actionKey: `text-${entries.length.toString()}`,
+        actionKey,
         kind: "AGENT_TEXT",
         label: null,
         detail: detail.text,
