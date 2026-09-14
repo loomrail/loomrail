@@ -4130,7 +4130,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectAgentRunById = database.prepare("SELECT * FROM agent_runs WHERE id = ?");
     // Step 1 of RECORD_AGENT_RUN_ACTIVITY: claim the next per-run sequence number, creating the
     // counters row on first use. Runs on every write, including one that step 2 below merges into
-    // an existing row, which is why `seq` is monotonic but not dense.
+    // an existing row, which is why `seq` is monotonic but not dense. Despite the column name, the
+    // `next_seq` this statement returns is the value THIS write just claimed (and step 2 stores as
+    // its row's `seq`), not the value the next write will claim -- that one is produced by the next
+    // `next_seq + 1` on the row this leaves behind.
     const claimAgentRunActivitySeq = database.prepare(
       `INSERT INTO agent_run_activity_state (agent_run_id, schema_version, next_seq, omitted_count, degraded)
        VALUES (?, 1, 1, 0, 0)
@@ -12947,8 +12950,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         const sessionRow = providerSessionRowSchema.parse(sessionValue);
         if (sessionRow.agent_run_id !== command.payload.agentRunId) {
-          throw new WorkflowDomainError(
-            "WORKFLOW_NOT_FOUND",
+          // Both rows were found -- this is not WORKFLOW_NOT_FOUND. `agent_run_id` is nullable, so
+          // a session never bound to any AgentRun also lands here rather than being conflated with
+          // "session not found".
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_SESSION_MISMATCH",
             "The ProviderSession does not belong to this AgentRun",
           );
         }
@@ -12956,6 +12962,10 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         const claim = agentRunActivityClaimRowSchema.parse(
           claimAgentRunActivitySeq.get(command.payload.agentRunId),
         );
+        // `entry.terminal` is accepted but never read below: the ON CONFLICT merge is
+        // order-insensitive (a terminal report folds its outcome into an existing row, or a late
+        // start folds into a row the terminal report already created), so which side of the pair
+        // this write is does not change what it does.
         const entry = command.payload.entry;
         const upserted = agentRunActivityUpsertedRowSchema.parse(
           upsertAgentRunActivityEntry.get(

@@ -191,8 +191,10 @@ describe("agent run activity", () => {
       entry: {
         actionKey: overrides.actionKey,
         kind: overrides.kind ?? "TOOL_CALL",
-        label: overrides.label ?? "Ran a tool",
-        detail: overrides.detail ?? null,
+        // `??` would treat an explicit `null` the same as "omitted" and silently replace it with
+        // the default, which is exactly the distinction the non-erasure test below needs to make.
+        label: overrides.label === undefined ? "Ran a tool" : overrides.label,
+        detail: overrides.detail === undefined ? null : overrides.detail,
         status: overrides.status,
         terminal: overrides.terminal,
         truncated: overrides.truncated ?? false,
@@ -214,6 +216,50 @@ describe("agent run activity", () => {
     if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
     expect(page.entries).toHaveLength(1);
     expect(page.entries[0]?.status).toBe("exit 0");
+  });
+
+  // The property that makes this upsert correct rather than merely present: a terminal report adds
+  // its outcome, it does not erase the observation its start recorded. The start below carries a
+  // real label, detail, and truncated:true; the terminal report that follows for the same
+  // actionKey carries label:null, detail:null, truncated:false -- an erasing ON CONFLICT clause
+  // would let the terminal report's nulls win, and this test exists to catch exactly that.
+  it("keeps the start's label, detail, and truncated flag when a terminal report carries none", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.execute(
+      recordActivity(fixture, {
+        actionKey: "c1",
+        terminal: false,
+        status: null,
+        label: "Listed the repository root",
+        detail: "ls -la /workspace",
+        truncated: true,
+      }),
+    );
+    localState.execute(
+      recordActivity(fixture, {
+        actionKey: "c1",
+        terminal: true,
+        status: "exit 0",
+        label: null,
+        detail: null,
+        truncated: false,
+      }),
+    );
+
+    const page = localState.query({
+      type: "LIST_AGENT_RUN_ACTIVITY",
+      agentRunId: fixture.agentRunId,
+      limit: 50,
+    });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]).toMatchObject({
+      label: "Listed the repository root",
+      detail: "ls -la /workspace",
+      truncated: true,
+      status: "exit 0",
+    });
   });
 
   it("evicts the oldest entries past the bound and counts what it dropped", async () => {

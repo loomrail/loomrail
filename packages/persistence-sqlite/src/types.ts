@@ -97,6 +97,12 @@ export type StateStoreErrorCode =
   // the activity buffer carries no authority, but it still must not be forgeable by an arbitrary
   // caller of the command surface.
   | "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN"
+  // The named ProviderSession exists but its own `agent_run_id` does not match the payload's --
+  // including a session never bound to any AgentRun, where `agent_run_id` is null. Both rows were
+  // found; the failure is that they disagree. Kept distinct from WORKFLOW_NOT_FOUND (used for a
+  // genuinely missing row) so a caller gets a typed error that names what actually went wrong
+  // rather than one that reads as "nothing here" when something was there and wrong.
+  | "AGENT_RUN_ACTIVITY_SESSION_MISMATCH"
   | "QA_RUN_ALREADY_EXISTS"
   | "QA_RUN_NOT_FOUND"
   | "QA_STABLE_TREE_MISSING"
