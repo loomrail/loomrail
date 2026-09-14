@@ -17,6 +17,7 @@ import {
 import {
   attentionInboxResponseSchema,
   agentFleetResponseSchema,
+  agentRunActivityPageSchema,
   adoptDeploymentPlanRequestSchema,
   answerHumanRequestRequestSchema,
   approveDeploymentRequestSchema,
@@ -48,6 +49,7 @@ import {
   launchEvidencePackageResponseSchema,
   launchReleaseProjectResponseSchema,
   guidedDeploymentProjectResponseSchema,
+  liveProviderIdSchema,
   saveLaunchEnvironmentRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
@@ -207,6 +209,11 @@ import { secretRedactions } from "@loomrail/workspace-executor";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
 
+import {
+  buildAgentRunActivityPage,
+  decodeCursor,
+  REPORTED_ENTRIES_FETCH_LIMIT,
+} from "./agent-run-activity.js";
 import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
 import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
@@ -432,6 +439,10 @@ const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
 const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
+const agentRunActivityParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
+// Opaque per Task 8's contract: this daemon never inspects `after` beyond handing it to
+// `decodeCursor`, so the only runtime shape worth asserting here is "a non-empty string, if present".
+const agentRunActivityQuerySchema = z.object({ after: z.string().min(1).optional() }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
@@ -3379,6 +3390,85 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           .header("content-security-policy", "default-src 'none'; sandbox")
           .type("text/plain; charset=utf-8")
           .send(output);
+      } catch (error: unknown) {
+        return sendOperationError(error, request, reply, correlationId);
+      }
+    });
+
+    // Merges `workspace_tool_calls` (daemon-audited) with `agent_run_activity` (provider-reported)
+    // into one chronological feed on read -- see apps/daemon/src/agent-run-activity.ts. Mirrors the
+    // verification-checks/output route directly above: `requireSession`, `requestCorrelationId`,
+    // `cache-control: no-store` and `x-content-type-options: nosniff` on a bounded, redacted body.
+    //
+    // No project-scoped ACL exists anywhere in this daemon (`requireSession` is the whole of it --
+    // one local owner, one session), so "a run the caller cannot see" is enforced the same way every
+    // other :id-scoped route here enforces it: the AgentRun either exists or this answers 404, same
+    // as GET_WORK_ITEM/GET_AGENT_RUN elsewhere never leak which opaque ids are real.
+    app.get("/api/v1/agent-runs/:runId/activity", (request, reply) => {
+      const correlationId = requestCorrelationId(request);
+      if (!requireSession(request, reply, correlationId)) return;
+      try {
+        const params = agentRunActivityParamsSchema.parse(request.params);
+        const query = agentRunActivityQuerySchema.parse(request.query);
+        const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId: params.runId });
+        const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
+        if (agentRun === undefined) {
+          return reply
+            .code(404)
+            .send(createError("AGENT_RUN_NOT_FOUND", "The AgentRun does not exist", correlationId));
+        }
+        // A cursor is client-supplied input like any other (Task 8): `undefined` means the first
+        // page, but a present-and-unparseable one is refused outright rather than silently treated
+        // as "no cursor" -- that would let a corrupted or forged value quietly restart the feed
+        // instead of telling the caller their own cursor was rejected.
+        let cursor = null;
+        if (query.after !== undefined) {
+          cursor = decodeCursor(query.after);
+          if (cursor === null) {
+            return reply
+              .code(400)
+              .send(createError("INVALID_ACTIVITY_CURSOR", "The activity cursor is invalid", correlationId));
+          }
+        }
+        const reportedResult = localState.query({
+          type: "LIST_AGENT_RUN_ACTIVITY",
+          agentRunId: params.runId,
+          limit: REPORTED_ENTRIES_FETCH_LIMIT,
+        });
+        if (reportedResult.type !== "AGENT_RUN_ACTIVITY") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The reported activity buffer could not be loaded",
+          );
+        }
+        const auditedResult = localState.query({
+          type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN",
+          agentRunId: params.runId,
+        });
+        if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
+          throw new StateStoreError(
+            "PERSISTENCE_FAILURE",
+            "The audited workspace tool calls could not be loaded",
+          );
+        }
+        // Audited rows carry no provider column of their own (ADR-0014); the AgentRun they belong to
+        // has exactly one provider for its whole lifetime, so that is the source of truth. `null` for
+        // MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures, just not one the
+        // activity feed was ever built to carry (`buildAgentRunActivityPage` treats it as "no audited
+        // entries possible", not as a request to fail).
+        const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
+        const page = buildAgentRunActivityPage({
+          auditedCalls: auditedResult.calls,
+          provider: runProvider.success ? runProvider.data : null,
+          reportedRows: reportedResult.entries,
+          omittedCount: reportedResult.omittedCount,
+          degraded: reportedResult.degraded,
+          cursor,
+        });
+        return reply
+          .header("cache-control", "no-store")
+          .header("x-content-type-options", "nosniff")
+          .send(agentRunActivityPageSchema.parse(page));
       } catch (error: unknown) {
         return sendOperationError(error, request, reply, correlationId);
       }

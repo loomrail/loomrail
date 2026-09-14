@@ -217,6 +217,10 @@ export type StateQuery =
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_WORKSPACE_TOOL_CALLS"; providerSessionId: string }
+  // Task 8's merge reads the audited side of the feed straight off `agent_run_id`, the column
+  // `workspace_tool_calls` already carries -- not by resolving a ProviderSession first, which would
+  // assume one session per AgentRun instead of just asking the table for what it already knows.
+  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"; agentRunId: string }
   | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
