@@ -28,6 +28,7 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
+import { parseCodexActivity } from "./activity.js";
 import { readCodexAllowance } from "./allowance.js";
 import { parseCodexEvent, TERMINAL_TURN_EVENT } from "./stream.js";
 
@@ -252,12 +253,16 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           environment: resolved.environment,
           onLine: (line) => {
             linesReceived += 1;
+            const activity = parseCodexActivity(line);
+            for (const entry of activity) listener.onActivity?.(entry);
             const event = parseCodexEvent(line);
             if (event === null) {
               const decoded = tryParseStructuredResult(line, invocation);
               if (decoded === null) {
-                linesUnused += 1;
-                linesUnreadable += 1;
+                if (activity.length === 0) {
+                  linesUnused += 1;
+                  linesUnreadable += 1;
+                }
               } else {
                 result = decoded;
                 if (decoded.checkpoint !== null) listener.onCheckpoint(decoded.checkpoint);
@@ -292,8 +297,10 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
                 return;
               case "thread.started":
               case "turn.started":
-              case "item.ignored":
                 linesUnused += 1;
+                return;
+              case "item.ignored":
+                if (activity.length === 0) linesUnused += 1;
                 return;
             }
           },

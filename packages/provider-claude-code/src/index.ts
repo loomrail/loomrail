@@ -28,6 +28,7 @@ import {
 } from "@loomrail/provider-core";
 import { z } from "zod";
 
+import { parseClaudeActivity } from "./activity.js";
 import { parseClaudeEvent } from "./stream.js";
 
 export { claudeCodeProviderDiagnostics } from "./diagnostics.js";
@@ -218,9 +219,11 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
           environment: resolved.environment,
           onLine: (line) => {
             linesReceived += 1;
+            const activity = parseClaudeActivity(line);
+            for (const entry of activity) listener.onActivity?.(entry);
             const event = parseClaudeEvent(line);
             if (event === null) {
-              linesUnused += 1;
+              if (activity.length === 0) linesUnused += 1;
               return;
             }
             usage = {
