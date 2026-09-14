@@ -273,7 +273,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
               case "item.completed": {
                 const decoded = tryParseStructuredResult(event.item.text, invocation);
                 if (decoded === null) {
-                  linesUnused += 1;
+                  if (activity.length === 0) linesUnused += 1;
                 } else {
                   result = decoded;
                   if (decoded.checkpoint !== null) listener.onCheckpoint(decoded.checkpoint);
