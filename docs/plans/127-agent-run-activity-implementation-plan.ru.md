@@ -28,6 +28,13 @@ React + TanStack Router, Playwright.
 - Инжектируемые часы и генераторы ID, никаких `Date.now()` в детерминируемом коде.
 - **Коммиты только по явной просьбе владельца** (AGENTS.md). Шаги «Commit» выполняются, если владелец попросил
   коммитить; иначе изменения остаются в рабочем дереве.
+- Lint является обязательным и уже ронял работу по этому плану трижды. Правила, о которые здесь спотыкаются:
+  `@typescript-eslint/no-deprecated` (`z.iso.datetime()`, не `z.string().datetime()`),
+  `@typescript-eslint/no-misused-spread` (никогда не раскрывать строку через `[...s]`, только `Array.from(s)`),
+  `@typescript-eslint/restrict-template-expressions` (число в шаблонной строке требует явного `.toString()`).
+  Прогонять eslint по новым файлам до коммита и вкладывать его вывод в отчёт.
+- Пакеты собираются в `dist/`, и свежесозданный модуль не виден зависимым пакетам, пока его пакет не пересобран.
+  После добавления файла в `packages/*/src` выполнять `corepack pnpm build` до прогона тестов зависимого пакета.
 - Границы: `label` ≤ 500 символов, `detail` ≤ 2 000, `status` ≤ 120, `actionKey` ≤ 200, не более 1 000 записей на
   прогон.
 
@@ -138,7 +145,7 @@ export const agentRunActivityEntrySchema = z
     // Monotonic within a run but NOT dense: eviction leaves gaps, and a reader that treats a
     // missing number as a defect would report every long run as broken.
     seq: z.number().int().positive(),
-    at: z.string().datetime(),
+    at: z.iso.datetime(),
     origin: activityOriginSchema,
     provider: z.enum(["CODEX", "CLAUDE_CODE"]),
     kind: providerActivityKindSchema,
@@ -268,7 +275,9 @@ const commandItemSchema = z.object({
   type: z.literal("command_execution"),
   command: z.string(),
   status: z.string().optional(),
-  exit_code: z.number().int().optional(),
+  // `.nullish()`, not `.optional()`: the real stream's `item.started` line carries an explicit
+  // `"exit_code": null`, which `.optional()` rejects.
+  exit_code: z.number().int().nullish(),
 });
 
 const fileChangeItemSchema = z.object({
@@ -319,10 +328,12 @@ export const parseCodexActivity = (line: string): readonly ProviderActivityEntry
           kind: "TOOL_CALL",
           label: label.text,
           detail: null,
+          // `.toString()` is not decoration: this repo's `restrict-template-expressions` rule
+          // rejects a bare number in a template literal.
           status: terminal
-            ? item.exit_code === undefined
+            ? item.exit_code === undefined || item.exit_code === null
               ? (item.status ?? null)
-              : `exit ${item.exit_code}`
+              : `exit ${item.exit_code.toString()}`
             : null,
           terminal,
           truncated: label.truncated,
@@ -423,7 +434,7 @@ describe("boundActivityText", () => {
 
   it("does not split a surrogate pair", () => {
     const result = boundActivityText("😀".repeat(400), 500);
-    expect(result.text === null || [...result.text].every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(true);
+    expect(result.text === null || Array.from(result.text).every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(true);
   });
 });
 ```
@@ -453,7 +464,7 @@ export type BoundedActivityText = {
 export const boundActivityText = (value: string, maxChars: number): BoundedActivityText => {
   const trimmed = value.trim();
   if (trimmed.length === 0) return { text: null, truncated: false };
-  const points = [...trimmed];
+  const points = Array.from(trimmed);
   if (points.length <= maxChars) return { text: trimmed, truncated: false };
   return { text: points.slice(0, maxChars).join(""), truncated: true };
 };
@@ -655,7 +666,7 @@ export const parseClaudeActivity = (line: string): readonly ProviderActivityEntr
       const detail = boundActivityText(text.data.text, 2_000);
       if (detail.text === null) continue;
       entries.push({
-        actionKey: `text-${entries.length}`,
+        actionKey: `text-${entries.length.toString()}`,
         kind: "AGENT_TEXT",
         label: null,
         detail: detail.text,
@@ -1233,7 +1244,7 @@ export const mergeRunActivity = (
   );
 
 const cursorSchema = z
-  .object({ at: z.string().datetime(), origin: activityOriginSchema, id: z.string().min(1) })
+  .object({ at: z.iso.datetime(), origin: activityOriginSchema, id: z.string().min(1) })
   .strict();
 
 export const encodeCursor = (entry: AgentRunActivityEntry): string =>
