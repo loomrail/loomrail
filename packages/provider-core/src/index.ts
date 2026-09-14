@@ -53,6 +53,7 @@ export {
   projectProviderAllowanceAdvisory,
   projectProviderAllowanceFreshness,
 } from "./allowance.js";
+export * from "./activity-text.js";
 export {
   WORKSPACE_TOOL_MAX_CALLS,
   WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
