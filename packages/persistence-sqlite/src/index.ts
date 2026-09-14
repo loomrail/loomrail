@@ -4172,6 +4172,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE agent_run_id = ?
        RETURNING omitted_count, degraded`,
     );
+    // MARK_AGENT_RUN_ACTIVITY_DEGRADED's write. Same INSERT ... ON CONFLICT idiom as step 1 above,
+    // so a run whose very first RECORD_AGENT_RUN_ACTIVITY write failed -- before this row ever
+    // existed -- still gets its degradation recorded, rather than the mark silently affecting zero
+    // rows for lack of one to update. The ON CONFLICT branch touches only `degraded`, leaving
+    // next_seq/omitted_count exactly as a real recorder write left them (or would later leave them).
+    const markAgentRunActivityDegraded = database.prepare(
+      `INSERT INTO agent_run_activity_state (agent_run_id, schema_version, next_seq, omitted_count, degraded)
+       VALUES (?, 1, 1, 0, 1)
+       ON CONFLICT (agent_run_id) DO UPDATE SET degraded = 1`,
+    );
     const selectAgentRunActivityEntries = database.prepare(
       `SELECT id, seq, provider, kind, label, detail, status, truncated, observed_at
        FROM agent_run_activity
@@ -13001,6 +13011,33 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           seq: upserted.seq,
           omittedCount: counters.omitted_count,
           degraded: counters.degraded === 1,
+        });
+      }
+
+      if (command.type === "MARK_AGENT_RUN_ACTIVITY_DEGRADED") {
+        // Same actor guard as RECORD_AGENT_RUN_ACTIVITY: this write carries no authority of its
+        // own, but still must not be forgeable by an arbitrary caller.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN",
+            "Only the provider session loop can mark agent run activity degraded",
+          );
+        }
+        // The AgentRun must exist -- the same check RECORD_AGENT_RUN_ACTIVITY makes before it
+        // touches this table -- so a bogus id fails with a clear WORKFLOW_NOT_FOUND instead of the
+        // FK constraint on agent_run_activity_state.agent_run_id surfacing as an opaque persistence
+        // failure.
+        if (selectAgentRunById.get(command.payload.agentRunId) === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The AgentRun does not exist");
+        }
+
+        markAgentRunActivityDegraded.run(command.payload.agentRunId);
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_DEGRADED_MARKED",
+          replayed: false,
+          agentRunId: command.payload.agentRunId,
         });
       }
 

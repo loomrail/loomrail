@@ -1,7 +1,12 @@
 import { z } from "zod";
 
 import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from "./agents.js";
-import { agentRunActivityRecordedResultSchema, recordAgentRunActivityCommandSchema } from "./activity.js";
+import {
+  agentRunActivityDegradedMarkedResultSchema,
+  agentRunActivityRecordedResultSchema,
+  markAgentRunActivityDegradedCommandSchema,
+  recordAgentRunActivityCommandSchema,
+} from "./activity.js";
 import {
   adoptDeploymentPlanCommandSchema,
   approveDeploymentCommandSchema,
@@ -754,6 +759,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   startWorkspaceToolCallCommandSchema,
   finishWorkspaceToolCallCommandSchema,
   recordAgentRunActivityCommandSchema,
+  markAgentRunActivityDegradedCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -895,6 +901,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workItemWorkspaceOrphanedResultSchema,
   workspaceToolCallChangedResultSchema,
   agentRunActivityRecordedResultSchema,
+  agentRunActivityDegradedMarkedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

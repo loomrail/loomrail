@@ -338,3 +338,259 @@ describe("agent run activity", () => {
     expect(page.entries).toHaveLength(0);
   });
 });
+
+describe("mark agent run activity degraded", () => {
+  let temporaryDirectory = "";
+  let databasePath = "";
+  let state: LocalState | undefined;
+  let nextId = 0;
+  let clockOffsetMs = 0;
+
+  beforeEach(async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail mark agent run activity degraded тест "));
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    clockOffsetMs = 0;
+  });
+
+  afterEach(async () => {
+    state?.close();
+    state = undefined;
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  const tick = (): Date => {
+    clockOffsetMs += 1;
+    return new Date(new Date(timestamp).getTime() + clockOffsetMs);
+  };
+
+  const open = async (): Promise<LocalState> => {
+    state = await openLocalState({
+      databasePath,
+      now: tick,
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    return state;
+  };
+
+  // Duplicated from the describe block above rather than shared, so this block's fixtures stay
+  // readable on their own -- MARK_AGENT_RUN_ACTIVITY_DEGRADED cares about none of RECORD's
+  // provider-session plumbing beyond the AgentRun it hangs off of.
+  const startExecution = (localState: LocalState): ActivityFixture => {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "register-project",
+      correlationId: "correlation-register-project",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: "project-1",
+        fixtureId: "web-app-a",
+        name: "Mark agent run activity degraded fixture",
+        repositoryPath: join(temporaryDirectory, "repo"),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: "create-work-item",
+      correlationId: "correlation-create-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "project-1",
+        parentId: null,
+        type: "TASK",
+        title: "Mark agent run activity degraded",
+        description: "Synthetic fixture",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Agent run activity degradation is durable"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "ready-work-item",
+      correlationId: "correlation-ready-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-pipeline",
+      correlationId: "correlation-start-pipeline",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: activityTemplate,
+        budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const agent = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run",
+      correlationId: "correlation-start-agent-run",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: pipeline.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+    const session = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-provider-session",
+      correlationId: "correlation-start-provider-session",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId: pipeline.stageAttempt.id,
+        recipe: {
+          schemaVersion: 1,
+          templateId: activityTemplate.id,
+          templateVersion: activityTemplate.version,
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"a".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+        },
+      },
+    });
+    if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+    return {
+      agentRunId: agent.run.id,
+      providerSessionId: session.session.id,
+      provider: "CODEX",
+    };
+  };
+
+  const recordActivity = (fixture: ActivityFixture, actionKey: string) => ({
+    schemaVersion: 1 as const,
+    commandId: `activity-${fixture.providerSessionId}-${actionKey}`,
+    correlationId: "correlation-agent-run-activity",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "RECORD_AGENT_RUN_ACTIVITY" as const,
+    payload: {
+      agentRunId: fixture.agentRunId,
+      providerSessionId: fixture.providerSessionId,
+      provider: fixture.provider,
+      entry: {
+        actionKey,
+        kind: "TOOL_CALL" as const,
+        label: "Ran a tool",
+        detail: null,
+        status: "ok",
+        terminal: true,
+        truncated: false,
+      },
+    },
+  });
+
+  const markDegraded = (agentRunId: string, commandId: string) => ({
+    schemaVersion: 1 as const,
+    commandId,
+    correlationId: "correlation-mark-agent-run-activity-degraded",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED" as const,
+    payload: { agentRunId },
+  });
+
+  const readPage = (localState: LocalState, agentRunId: string) => {
+    const page = localState.query({ type: "LIST_AGENT_RUN_ACTIVITY", agentRunId, limit: 50 });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    return page;
+  };
+
+  it("marks an existing run's activity feed degraded without disturbing its entries", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.execute(recordActivity(fixture, "c1"));
+
+    const result = localState.execute(markDegraded(fixture.agentRunId, "mark-degraded-1"));
+    expect(result).toMatchObject({
+      type: "AGENT_RUN_ACTIVITY_DEGRADED_MARKED",
+      agentRunId: fixture.agentRunId,
+    });
+
+    const page = readPage(localState, fixture.agentRunId);
+    expect(page.degraded).toBe(true);
+    expect(page.entries).toHaveLength(1);
+    expect(page.omittedCount).toBe(0);
+  });
+
+  // The caller marks on first failure and again at session end (spec above the command), so a
+  // second mark is the ordinary path, not an error -- issued as a genuinely separate command
+  // (distinct commandId) rather than a retried one, so this exercises the handler's own
+  // idempotence rather than the generic commandId replay cache.
+  it("marking an already-degraded run again succeeds and changes nothing", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.execute(recordActivity(fixture, "c1"));
+    localState.execute(markDegraded(fixture.agentRunId, "mark-degraded-first"));
+    const before = readPage(localState, fixture.agentRunId);
+
+    const second = localState.execute(markDegraded(fixture.agentRunId, "mark-degraded-second"));
+    expect(second).toMatchObject({ type: "AGENT_RUN_ACTIVITY_DEGRADED_MARKED" });
+
+    const after = readPage(localState, fixture.agentRunId);
+    expect(after.degraded).toBe(true);
+    expect(after.omittedCount).toBe(before.omittedCount);
+    expect(after.entries).toEqual(before.entries);
+  });
+
+  // The recorder can fail on its very first entry for a run, before RECORD_AGENT_RUN_ACTIVITY has
+  // ever created a counters row. Honest degradation reporting cannot depend on having already
+  // succeeded once, so this must create the row rather than throw for lack of one to update --
+  // proven here against the same LIST_AGENT_RUN_ACTIVITY read a real caller would use.
+  it("marks a run degraded even when no activity was ever recorded for it", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+
+    const result = localState.execute(markDegraded(fixture.agentRunId, "mark-degraded-first-failure"));
+    expect(result).toMatchObject({
+      type: "AGENT_RUN_ACTIVITY_DEGRADED_MARKED",
+      agentRunId: fixture.agentRunId,
+    });
+
+    const page = readPage(localState, fixture.agentRunId);
+    expect(page.degraded).toBe(true);
+    expect(page.entries).toHaveLength(0);
+    expect(page.omittedCount).toBe(0);
+  });
+
+  it("rejects an actor other than the session loop, writing nothing", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+
+    expect(() =>
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "forbidden-mark-agent-run-activity-degraded",
+        correlationId: "correlation-forbidden-mark-agent-run-activity-degraded",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
+        payload: { agentRunId: fixture.agentRunId },
+      }),
+    ).toThrow(StateStoreError);
+
+    const page = readPage(localState, fixture.agentRunId);
+    expect(page.degraded).toBe(false);
+  });
+
+  it("rejects an AgentRun that does not exist", async () => {
+    const localState = await open();
+
+    expect(() =>
+      localState.execute(markDegraded("agent-run-missing", "mark-degraded-missing-run")),
+    ).toThrow();
+  });
+});

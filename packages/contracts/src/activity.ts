@@ -130,3 +130,32 @@ export const agentRunActivityRecordedResultSchema = commandResultBaseSchema.exte
 
 export type RecordAgentRunActivityCommand = z.infer<typeof recordAgentRunActivityCommandSchema>;
 export type AgentRunActivityRecordedResult = z.infer<typeof agentRunActivityRecordedResultSchema>;
+
+/**
+ * Marks an AgentRun's activity feed degraded, as its own short command rather than a side effect of
+ * RECORD_AGENT_RUN_ACTIVITY: when the recorder fails to write an entry, that write's transaction has
+ * already rolled back, so it cannot also record its own failure. A separate command with its own
+ * transaction is what lets the degradation survive that rollback -- issued the moment the failure
+ * first happens, and again at session end as a backstop.
+ *
+ * Idempotent by design: marking an already-degraded run again must succeed and change nothing, since
+ * the backstop call is the ordinary path, not an error.
+ */
+export const markAgentRunActivityDegradedCommandSchema = commandBaseSchema.extend({
+  type: z.literal("MARK_AGENT_RUN_ACTIVITY_DEGRADED"),
+  payload: z
+    .object({
+      agentRunId: opaqueIdSchema,
+    })
+    .strict(),
+});
+
+// No `event`, same reasoning as AGENT_RUN_ACTIVITY_RECORDED above: the activity feed carries no
+// authority, so marking it degraded does not enter the append-only Event vocabulary either.
+export const agentRunActivityDegradedMarkedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("AGENT_RUN_ACTIVITY_DEGRADED_MARKED"),
+  agentRunId: opaqueIdSchema,
+});
+
+export type MarkAgentRunActivityDegradedCommand = z.infer<typeof markAgentRunActivityDegradedCommandSchema>;
+export type AgentRunActivityDegradedMarkedResult = z.infer<typeof agentRunActivityDegradedMarkedResultSchema>;
