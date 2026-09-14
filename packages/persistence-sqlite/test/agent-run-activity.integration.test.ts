@@ -593,4 +593,63 @@ describe("mark agent run activity degraded", () => {
       localState.execute(markDegraded("agent-run-missing", "mark-degraded-missing-run")),
     ).toThrow();
   });
+
+  // Recovery, not the recorder. The buffer the recorder was filling lived in the process that died,
+  // so whatever it still held when the daemon stopped was never written and never will be. A feed
+  // that is missing its tail must say so; left unmarked it reports `degraded = false`, which is the
+  // silent lie this flag exists to prevent -- and the one case no in-process code path can cover,
+  // because the process that would have marked it is gone.
+  it("marks every AgentRun that startup reconciliation interrupts as having a degraded feed", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.execute(recordActivity(fixture, "c1"));
+    expect(readPage(localState, fixture.agentRunId).degraded).toBe(false);
+    localState.close();
+    state = undefined;
+
+    const reopened = await open();
+    const reconciled = reopened.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-after-crash",
+      correlationId: "correlation-reconcile-after-crash",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+    expect(reconciled.type).toBe("WORKFLOWS_RECONCILED");
+
+    const run = reopened.query({ type: "GET_AGENT_RUN", agentRunId: fixture.agentRunId });
+    if (run.type !== "AGENT_RUNS") throw new Error("Expected the interrupted AgentRun");
+    expect(run.runs[0]?.status).toBe("INTERRUPTED");
+    const page = readPage(reopened, fixture.agentRunId);
+    expect(page.degraded).toBe(true);
+    // What survived the crash is still there and still readable: the mark says the feed is
+    // incomplete, it does not throw the feed away.
+    expect(page.entries).toHaveLength(1);
+  });
+
+  // The counters row is created by whichever of the two writers gets there first. A run interrupted
+  // before its recorder ever wrote has no row at all, and the mark must create one rather than
+  // affect zero rows -- the same requirement the first-failure case has, reached from recovery.
+  it("marks an interrupted AgentRun that never recorded any activity", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.close();
+    state = undefined;
+
+    const reopened = await open();
+    reopened.execute({
+      schemaVersion: 1,
+      commandId: "reconcile-after-crash-with-empty-buffer",
+      correlationId: "correlation-reconcile-after-crash-with-empty-buffer",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "RECONCILE_WORKFLOWS",
+      payload: {},
+    });
+
+    const page = readPage(reopened, fixture.agentRunId);
+    expect(page.degraded).toBe(true);
+    expect(page.entries).toHaveLength(0);
+    expect(page.omittedCount).toBe(0);
+  });
 });

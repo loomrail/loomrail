@@ -19,6 +19,7 @@ import {
   type EndProviderSessionCommand,
   type EventSignal,
   type HumanRequestDraft,
+  type LiveProviderId,
   type McpSessionSnapshot,
   type ProviderActivityEntry,
   type ProviderOutcome,
@@ -160,11 +161,11 @@ const relativeToWorkspace = (value: string, workspacePath: string | null): strin
   return target.split(sep).join("/");
 };
 
-// A FILE_CHANGE entry names one path in `label` and, when a single action touched several, the rest
-// as a comma-joined list in `detail` (see `parseCodexActivity`). Each element is normalised on its
-// own; a path that itself contains a comma is split into pieces that each normalise to themselves,
-// so the worst case is two markers instead of one rather than a whole list condemned by one member.
-const relativeWorkspacePaths = (value: string, workspacePath: string | null): string =>
+// A FILE_CHANGE entry names ONE path in `label` and, when a single action touched several, the rest
+// as a comma-joined list in `detail` (see `parseCodexActivity`). Only `detail` is split: splitting a
+// `label` would render a path that legitimately contains a comma as two entries, and a single path
+// is not a list however it is punctuated.
+const relativeWorkspacePathList = (value: string, workspacePath: string | null): string =>
   value
     .split(",")
     .map((candidate) => candidate.trim())
@@ -198,10 +199,15 @@ const sanitizeActivityEntry = (
   redactValues: readonly string[],
   workspacePath: string | null,
 ): ProviderActivityEntry => {
-  const normalized = (value: string | null): string | null =>
-    value === null || entry.kind !== "FILE_CHANGE" ? value : relativeWorkspacePaths(value, workspacePath);
-  const label = cleanActivityText(normalized(entry.label), ACTIVITY_LABEL_LIMIT, redactValues);
-  const detail = cleanActivityText(normalized(entry.detail), ACTIVITY_DETAIL_LIMIT, redactValues);
+  const isFileChange = entry.kind === "FILE_CHANGE";
+  const normalizedLabel =
+    isFileChange && entry.label !== null ? relativeToWorkspace(entry.label, workspacePath) : entry.label;
+  const normalizedDetail =
+    isFileChange && entry.detail !== null
+      ? relativeWorkspacePathList(entry.detail, workspacePath)
+      : entry.detail;
+  const label = cleanActivityText(normalizedLabel, ACTIVITY_LABEL_LIMIT, redactValues);
+  const detail = cleanActivityText(normalizedDetail, ACTIVITY_DETAIL_LIMIT, redactValues);
   const status = cleanActivityText(entry.status, ACTIVITY_STATUS_LIMIT, redactValues);
   return {
     ...entry,
@@ -1105,6 +1111,34 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
   const roleProfile = executionPolicy.profile;
   const maxSessions = executionPolicy.snapshot.budget.maxProviderSessions;
   const agentRunId = executionPolicy.agentRunId;
+
+  /**
+   * Whether this AgentRun's activity feed is known to be incomplete, and whether that is recorded.
+   *
+   * Scoped to the RUN, not to a session, because `agent_run_activity_state.degraded` is a property
+   * of the run: a session whose entries were lost must still read as degraded from the next session
+   * in the same run, which a per-session flag rebuilt as `false` would silently undo.
+   *
+   * Seeded from what is already stored, because this process is not the only thing that can have
+   * degraded this feed -- a previous `runStageAttempt` call for the same AgentRun (a postponed
+   * dispatch picked back up), or startup reconciliation marking a run whose buffer died with the
+   * daemon. Read best-effort: a feed that cannot be read is assumed intact rather than allowed to
+   * fail an attempt, which is the same rule every other line of the recorder follows.
+   */
+  const activityFeed = { degraded: false, degradedWritten: false };
+  try {
+    const stored = deps.state.query({ type: "LIST_AGENT_RUN_ACTIVITY", agentRunId, limit: 1 });
+    if (stored.type === "AGENT_RUN_ACTIVITY" && stored.degraded) {
+      activityFeed.degraded = true;
+      activityFeed.degradedWritten = true;
+    }
+  } catch (error: unknown) {
+    deps.logger.warn(
+      { stageAttemptId, error: errorName(error) },
+      "The activity feed's current state could not be read; this run starts from an intact feed",
+    );
+  }
+
   const templateContextSpec = contextPackSpecFor(deps.template, readStageAttemptState(deps).attempt.stage);
   const contextSpec = refineContextPackForRole(templateContextSpec, roleProfile.playbook);
   const initialSessions = readAttemptSessions(deps, agentRunId);
@@ -1522,16 +1556,17 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       // Every integer percent already reported to state for this session. At most 101 entries.
       // See the comment on `reportedPercent` in `onContextWindow`.
       reportedPercents: new Set<number>(),
-      // The recorder's buffer and its verdict on the feed. Held with the rest of the session's
-      // mutable state for the same reason: `onActivity` fills the queue from inside the adapter's
-      // stdout handler while the drain below empties it from a timer.
+      // The recorder's buffer. Per session because it dies with the session -- the forced drain
+      // below is what stops that losing anything -- and held with the rest of the session's mutable
+      // state for the same reason as the rest of it: `onActivity` fills this queue from inside the
+      // adapter's stdout handler while the drain empties it from a timer.
       activityQueue: [] as ProviderActivityEntry[],
-      activityDegraded: false,
-      // Held here rather than as captured `let`s for a second reason as well: TypeScript narrows a
-      // `let` to its initializer inside the scope that declares it and does not widen it again for
-      // an assignment made from a closure, so the session-end read of the timer below would be
-      // typed `null` however often the scheduler had set it.
-      activityDegradedWritten: false,
+      // The timer is per-session -- it is cleared when this session ends -- and lives here rather
+      // than in a captured `let` for a second reason as well: TypeScript narrows a `let` to its
+      // initializer inside the scope that declares it and does not widen it again for an assignment
+      // made from a closure, so the session-end read below would be typed `null` however often the
+      // scheduler had set it. The feed's `degraded` verdict is NOT per-session and lives in
+      // `activityFeed`, above this loop.
       activityDrainTimer: null as NodeJS.Timeout | null,
     };
     let lastPublished: CheckpointDraft | null = null;
@@ -1632,14 +1667,14 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     // the child's stdout waits, and the drain already runs where a write belongs. A drain is
     // scheduled either way, so the mark reaches the database within one interval at the latest.
     const degradeActivityFeed = (): void => {
-      if (live.activityDegraded) return;
-      live.activityDegraded = true;
+      if (activityFeed.degraded) return;
+      activityFeed.degraded = true;
       scheduleActivityDrain();
     };
 
     // Its own short transaction, not a field on the entry write: a write that failed has already
     // rolled back, so it cannot also record its own failure. Best-effort in turn -- a failure here
-    // leaves `activityDegradedWritten` false, so the drain's next pass tries once more.
+    // leaves `activityFeed.degradedWritten` false, so the drain's next pass tries once more.
     const writeActivityDegraded = (): void => {
       try {
         deps.state.execute({
@@ -1650,18 +1685,45 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
           payload: { agentRunId },
         });
-        live.activityDegradedWritten = true;
+        activityFeed.degradedWritten = true;
       } catch (error: unknown) {
-        deps.logger.warn(
-          { providerSessionId: providerSession.id, error: errorName(error) },
-          "The activity feed for this run is degraded and could not be marked so",
-        );
+        // The logger is inside the guard with the write, not after it: an injected logger is as
+        // capable of throwing as the store is, and this function is reached from a timer callback
+        // and from the session's `finally`, where either throw is exactly what must not happen.
+        try {
+          deps.logger.warn(
+            { providerSessionId: providerSession.id, error: errorName(error) },
+            "The activity feed for this run is degraded and could not be marked so",
+          );
+        } catch {
+          // A recorder that cannot even log has nothing further to report, and still no licence to
+          // fail the session it was describing.
+        }
       }
     };
 
+    /**
+     * Writes the queue, off the hot path.
+     *
+     * The whole body is guarded, not just the per-entry write. This is called bare from a timer
+     * callback, where a throw is an uncaught exception that takes the daemon down, and from the
+     * session's `finally`, where a throw would replace the session's real outcome with a diagnostic
+     * failure. The loggers below are inside that guard for the same reason the store call is: an
+     * injected logger is no less able to throw than a store.
+     */
     const drainActivityQueue = (): void => {
       if (invocationProvider === null) return;
       const provider = invocationProvider;
+      try {
+        drainActivityQueueUnsafely(provider);
+      } catch {
+        // Nothing may escape, and nothing here is worth a second attempt at reporting: the feed is
+        // degraded, the next pass (or the session's forced one) will try to say so.
+        activityFeed.degraded = true;
+      }
+    };
+
+    const drainActivityQueueUnsafely = (provider: LiveProviderId): void => {
       const pending = live.activityQueue.splice(0, live.activityQueue.length);
       let failed = 0;
       for (const entry of pending) {
@@ -1684,7 +1746,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
           // caller: this runs on a timer, where a throw is an uncaught exception, and in the
           // session's `finally`, where it would replace the session's real outcome.
           failed += 1;
-          live.activityDegraded = true;
+          activityFeed.degraded = true;
         }
       }
       if (failed > 0) {
@@ -1698,11 +1760,11 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
       let changed = pending.length > 0;
       // Written here rather than only at session end: deferring it would show the owner a live feed
       // as complete exactly while they are watching it fall behind.
-      if (live.activityDegraded && !live.activityDegradedWritten) {
+      if (activityFeed.degraded && !activityFeed.degradedWritten) {
         writeActivityDegraded();
         // A feed that only just became degraded is a change worth a frame even when this pass wrote
         // no entry -- that is precisely the case where the owner is looking at a feed that stopped.
-        changed = changed || live.activityDegradedWritten;
+        changed = changed || activityFeed.degradedWritten;
       }
       if (changed) publishActivitySignal();
     };

@@ -12292,6 +12292,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "An orphaned AgentRun changed while it was being interrupted",
             );
           }
+          // The recorder's queue lived in the process that died. Whatever it still held when the
+          // daemon stopped was never written, and nothing will ever write it -- so the feed for this
+          // run is incomplete and has to say so. Left unmarked, a truncated feed reports
+          // `degraded = false`, which is exactly the silent lie the flag exists to prevent. Marked
+          // for every interrupted run rather than only for ones with rows, because "the buffer was
+          // lost" is not a thing this transaction can distinguish from "there was nothing in it".
+          markAgentRunActivityDegraded.run(current.id);
           // The existing reconciliation result predates A3 and intentionally remains compatible
           // with old command receipts; the durable Event is the new lifecycle fact.
           appendAgentEvent(
