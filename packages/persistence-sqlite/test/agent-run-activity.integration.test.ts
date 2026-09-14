@@ -1,0 +1,294 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import type { ProviderActivityEntry, WorkflowTemplate } from "@loomrail/contracts";
+
+import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
+
+const timestamp = "2026-09-03T10:00:00.000Z";
+const contextPack = {
+  schemaVersion: 1 as const,
+  sections: [{ id: "WORK_ITEM_BRIEF" as const, ordinal: 0, required: true }],
+};
+
+const activityTemplate: WorkflowTemplate = {
+  schemaVersion: 1,
+  id: "agent-run-activity-template",
+  version: 1,
+  name: "Agent run activity",
+  stages: [{ stage: "IMPLEMENT", ordinal: 0, contextPack }],
+};
+
+type ActivityFixture = {
+  agentRunId: string;
+  providerSessionId: string;
+  provider: "CODEX" | "CLAUDE_CODE";
+};
+
+describe("agent run activity", () => {
+  let temporaryDirectory = "";
+  let databasePath = "";
+  let state: LocalState | undefined;
+  let nextId = 0;
+  let clockOffsetMs = 0;
+
+  beforeEach(async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail agent run activity тест "));
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    clockOffsetMs = 0;
+  });
+
+  afterEach(async () => {
+    state?.close();
+    state = undefined;
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  // Ticks forward on every command so `observed_at` -- and therefore the LIST query's sort key --
+  // strictly increases with insertion order, even across the thousand-plus commands the eviction
+  // tests issue. A frozen clock would leave every row's timestamp identical and fall back on `id`
+  // string comparison for ordering, which does not sort numerically once ids cross a digit boundary
+  // (e.g. "activity-100" < "activity-99").
+  const tick = (): Date => {
+    clockOffsetMs += 1;
+    return new Date(new Date(timestamp).getTime() + clockOffsetMs);
+  };
+
+  const open = async (): Promise<LocalState> => {
+    state = await openLocalState({
+      databasePath,
+      now: tick,
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    return state;
+  };
+
+  const startExecution = (localState: LocalState): ActivityFixture => {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "register-project",
+      correlationId: "correlation-register-project",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: "project-1",
+        fixtureId: "web-app-a",
+        name: "Agent run activity fixture",
+        repositoryPath: join(temporaryDirectory, "repo"),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: "create-work-item",
+      correlationId: "correlation-create-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: "project-1",
+        parentId: null,
+        type: "TASK",
+        title: "Record live agent run activity",
+        description: "Synthetic fixture",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Agent run activity is durable"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: "ready-work-item",
+      correlationId: "correlation-ready-work-item",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-pipeline",
+      correlationId: "correlation-start-pipeline",
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: activityTemplate,
+        budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const agent = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-agent-run",
+      correlationId: "correlation-start-agent-run",
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: pipeline.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+    const session = localState.execute({
+      schemaVersion: 1,
+      commandId: "start-provider-session",
+      correlationId: "correlation-start-provider-session",
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId: pipeline.stageAttempt.id,
+        recipe: {
+          schemaVersion: 1,
+          templateId: activityTemplate.id,
+          templateVersion: activityTemplate.version,
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"a".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+        },
+      },
+    });
+    if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+    return {
+      agentRunId: agent.run.id,
+      providerSessionId: session.session.id,
+      provider: "CODEX",
+    };
+  };
+
+  // Mirrors the payload apps/daemon's session-loop recorder builds in Task 7: same commandId shape
+  // (so a start and its terminal report are distinct commands, merged by the handler's own upsert
+  // rather than by the generic commandId replay guard), same actor.
+  const recordActivity = (
+    fixture: ActivityFixture,
+    overrides: {
+      actionKey: string;
+      terminal: boolean;
+      status: string | null;
+      kind?: ProviderActivityEntry["kind"];
+      label?: string | null;
+      detail?: string | null;
+      truncated?: boolean;
+    },
+  ) => ({
+    schemaVersion: 1 as const,
+    commandId: `activity-${fixture.providerSessionId}-${overrides.actionKey}-${overrides.terminal ? "end" : "start"}`,
+    correlationId: "correlation-agent-run-activity",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "RECORD_AGENT_RUN_ACTIVITY" as const,
+    payload: {
+      agentRunId: fixture.agentRunId,
+      providerSessionId: fixture.providerSessionId,
+      provider: fixture.provider,
+      entry: {
+        actionKey: overrides.actionKey,
+        kind: overrides.kind ?? "TOOL_CALL",
+        label: overrides.label ?? "Ran a tool",
+        detail: overrides.detail ?? null,
+        status: overrides.status,
+        terminal: overrides.terminal,
+        truncated: overrides.truncated ?? false,
+      },
+    },
+  });
+
+  it("updates the row a start created instead of appending a second", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    localState.execute(recordActivity(fixture, { actionKey: "c1", terminal: false, status: null }));
+    localState.execute(recordActivity(fixture, { actionKey: "c1", terminal: true, status: "exit 0" }));
+
+    const page = localState.query({
+      type: "LIST_AGENT_RUN_ACTIVITY",
+      agentRunId: fixture.agentRunId,
+      limit: 50,
+    });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]?.status).toBe("exit 0");
+  });
+
+  it("evicts the oldest entries past the bound and counts what it dropped", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    for (let index = 0; index < 1_005; index += 1) {
+      localState.execute(
+        recordActivity(fixture, { actionKey: `c${index.toString()}`, terminal: true, status: "ok" }),
+      );
+    }
+
+    const page = localState.query({
+      type: "LIST_AGENT_RUN_ACTIVITY",
+      agentRunId: fixture.agentRunId,
+      limit: 2_000,
+    });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    expect(page.entries.length).toBe(1_000);
+    expect(page.omittedCount).toBe(5);
+  });
+
+  it("keeps seq monotonic across eviction", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    for (let index = 0; index < 1_005; index += 1) {
+      localState.execute(
+        recordActivity(fixture, { actionKey: `c${index.toString()}`, terminal: true, status: "ok" }),
+      );
+    }
+
+    const page = localState.query({
+      type: "LIST_AGENT_RUN_ACTIVITY",
+      agentRunId: fixture.agentRunId,
+      limit: 2_000,
+    });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    const seqs = page.entries.map((entry) => entry.seq);
+    expect([...seqs].sort((a, b) => a - b)).toEqual(seqs);
+  });
+
+  // Not in the brief's three cases, but this handler adds a SYSTEM/session-loop actor guard
+  // (mirroring RECORD_PROVIDER_USAGE's own) that has no other coverage in this plan; a diagnostic
+  // buffer with no authority still should not be forgeable by an arbitrary caller.
+  it("rejects an actor other than the session loop", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    expect(() =>
+      localState.execute({
+        schemaVersion: 1,
+        commandId: "forbidden-agent-run-activity",
+        correlationId: "correlation-forbidden-agent-run-activity",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "RECORD_AGENT_RUN_ACTIVITY",
+        payload: {
+          agentRunId: fixture.agentRunId,
+          providerSessionId: fixture.providerSessionId,
+          provider: fixture.provider,
+          entry: {
+            actionKey: "forbidden",
+            kind: "TOOL_CALL",
+            label: "Ran a tool",
+            detail: null,
+            status: null,
+            terminal: false,
+            truncated: false,
+          },
+        },
+      }),
+    ).toThrow(StateStoreError);
+    const page = localState.query({
+      type: "LIST_AGENT_RUN_ACTIVITY",
+      agentRunId: fixture.agentRunId,
+      limit: 50,
+    });
+    if (page.type !== "AGENT_RUN_ACTIVITY") throw new Error("Expected an agent run activity page");
+    expect(page.entries).toHaveLength(0);
+  });
+});

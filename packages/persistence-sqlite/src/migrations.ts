@@ -327,6 +327,11 @@ const migrations: readonly Migration[] = [
     filename: "0061_environment_bound_deployments.sql",
     rebuildsAReferencedTable: true,
   },
+  {
+    version: 62,
+    name: "agent_run_activity",
+    filename: "0062_agent_run_activity.sql",
+  },
 ];
 
 // `PRAGMA foreign_key_check` names the child table of each violation in its first column.

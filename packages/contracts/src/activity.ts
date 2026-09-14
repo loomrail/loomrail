@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { liveProviderIdSchema } from "./provider-selection.js";
+import { actorSchema, correlationIdSchema, opaqueIdSchema, schemaVersionSchema } from "./shared.js";
+
 /**
  * What a provider adapter reports about one action it took.
  *
@@ -76,3 +79,54 @@ export const agentRunActivityPageSchema = z
   .strict();
 
 export type AgentRunActivityPage = z.infer<typeof agentRunActivityPageSchema>;
+
+const commandBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    commandId: opaqueIdSchema,
+    correlationId: correlationIdSchema,
+    actor: actorSchema,
+  })
+  .strict();
+
+const commandResultBaseSchema = z
+  .object({
+    schemaVersion: schemaVersionSchema,
+    replayed: z.boolean(),
+  })
+  .strict();
+
+/**
+ * Records one action a provider reported taking against a running AgentRun.
+ *
+ * `projectId`/`workItemId` are deliberately absent from the payload: `agent_runs` already holds
+ * both and is the single source, so the persistence layer derives them from `agentRunId` inside the
+ * write transaction rather than trusting a second, potentially divergent copy carried here.
+ */
+export const recordAgentRunActivityCommandSchema = commandBaseSchema.extend({
+  type: z.literal("RECORD_AGENT_RUN_ACTIVITY"),
+  payload: z
+    .object({
+      agentRunId: opaqueIdSchema,
+      providerSessionId: opaqueIdSchema,
+      provider: liveProviderIdSchema,
+      entry: providerActivityEntrySchema,
+    })
+    .strict(),
+});
+
+// No `event` field: the activity feed is not domain history, so recording an entry never appends
+// to the append-only Event vocabulary. `entryId`/`seq` identify the row this write touched --
+// either a freshly created one or the one its matching start already created -- and
+// `omittedCount`/`degraded` echo the run's current buffer counters so a caller never has to issue a
+// second read just to see them.
+export const agentRunActivityRecordedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("AGENT_RUN_ACTIVITY_RECORDED"),
+  entryId: opaqueIdSchema,
+  seq: z.number().int().positive(),
+  omittedCount: z.number().int().nonnegative(),
+  degraded: z.boolean(),
+});
+
+export type RecordAgentRunActivityCommand = z.infer<typeof recordAgentRunActivityCommandSchema>;
+export type AgentRunActivityRecordedResult = z.infer<typeof agentRunActivityRecordedResultSchema>;

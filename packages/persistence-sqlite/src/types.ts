@@ -20,9 +20,11 @@ import type {
   LaunchMeasurementPlan,
   LaunchMeasurementRun,
   LaunchRelease,
+  LiveProviderId,
   McpProfileView,
   McpSessionSnapshot,
   McpToolCallRecord,
+  ProviderActivityEntry,
   Project,
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
@@ -91,6 +93,10 @@ export type StateStoreErrorCode =
   | "AGENT_RUN_NOT_ACTIVE"
   | "AGENT_RUN_CAPACITY_EXHAUSTED"
   | "AGENT_RUN_BUDGET_EXHAUSTED"
+  // RECORD_AGENT_RUN_ACTIVITY is daemon-internal, same rationale as PROVIDER_USAGE_ACTOR_FORBIDDEN:
+  // the activity buffer carries no authority, but it still must not be forgeable by an arbitrary
+  // caller of the command surface.
+  | "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN"
   | "QA_RUN_ALREADY_EXISTS"
   | "QA_RUN_NOT_FOUND"
   | "QA_STABLE_TREE_MISSING"
@@ -139,6 +145,26 @@ export class StateStoreError extends Error {
     this.details = details;
   }
 }
+
+/**
+ * One row of the prunable `agent_run_activity` buffer, as read back for one AgentRun.
+ *
+ * Deliberately lacks `origin`, unlike the contracts' `AgentRunActivityEntry`: this is a raw read of
+ * a single table, and `origin` is computed by the merge layer that also reads `workspace_tool_calls`
+ * (a later task) from which table a row came from. Storing or returning it from here would let it
+ * be written wrongly instead of computed.
+ */
+export type AgentRunActivityRow = {
+  id: string;
+  seq: number;
+  observedAt: string;
+  provider: LiveProviderId;
+  kind: ProviderActivityEntry["kind"];
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+  truncated: boolean;
+};
 
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
@@ -203,6 +229,14 @@ export type StateQuery =
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
   | { type: "GET_AGENT_RUN"; agentRunId: string }
+  | {
+      // Raw read of the prunable `agent_run_activity` buffer for one AgentRun (Task 6). Task 8's
+      // merged feed layers `origin` and cross-source pagination on top of this; this query only
+      // ever sees one table.
+      type: "LIST_AGENT_RUN_ACTIVITY";
+      agentRunId: string;
+      limit?: number;
+    }
   | { type: "GET_QA_RUN"; qaRunId: string }
   | { type: "GET_QA_STATE"; pipelineRunId: string }
   | { type: "LIST_EXPIRED_QA_ATTACHMENTS"; closedBefore: string; limit?: number }
@@ -352,6 +386,12 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | {
+      type: "AGENT_RUN_ACTIVITY";
+      entries: AgentRunActivityRow[];
+      omittedCount: number;
+      degraded: boolean;
+    }
   | { type: "QA_RUN"; qaRun: QARun | null }
   | {
       type: "QA_STATE";
@@ -462,7 +502,8 @@ export type LocalStateIdKind =
   | "mcpGrant"
   | "mcpSessionSnapshot"
   | "mcpToolCall"
-  | "workspaceToolCall";
+  | "workspaceToolCall"
+  | "agentRunActivity";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

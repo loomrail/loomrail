@@ -343,6 +343,7 @@ import { canonicalJson } from "./canonical-json.js";
 import { applyMigrations, databaseWasNonEmpty } from "./migrations.js";
 import {
   StateStoreError,
+  type AgentRunActivityRow,
   type LocalState,
   type OpenLocalStateOptions,
   type OrphanProcessEvent,
@@ -442,6 +443,53 @@ const agentRunRowSchema = z.object({
   finished_at: z.string().nullable(),
   version: z.number().int(),
 });
+
+// The `next_seq` this write claimed, from step 1's `INSERT ... ON CONFLICT DO UPDATE RETURNING`.
+const agentRunActivityClaimRowSchema = z.object({ next_seq: z.number().int() });
+
+// The row this write's upsert landed on, from step 2's `RETURNING id, seq` -- either a fresh insert
+// or the row its matching start already created, whichever the ON CONFLICT merge kept.
+const agentRunActivityUpsertedRowSchema = z.object({ id: z.string(), seq: z.number().int() });
+
+// The counters after step 3's eviction, from `RETURNING omitted_count, degraded`.
+const agentRunActivityCountersRowSchema = z.object({
+  omitted_count: z.number().int(),
+  degraded: z.number().int(),
+});
+
+// The full per-run counters, for a plain read with no write alongside it (the LIST query).
+const agentRunActivityStateRowSchema = z.object({
+  next_seq: z.number().int(),
+  omitted_count: z.number().int(),
+  degraded: z.number().int(),
+});
+
+const agentRunActivityEntryRowSchema = z.object({
+  id: z.string(),
+  seq: z.number().int(),
+  provider: z.enum(["CODEX", "CLAUDE_CODE"]),
+  kind: z.enum(["TOOL_CALL", "AGENT_TEXT", "FILE_CHANGE", "PROVIDER_ERROR"]),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+  status: z.string().nullable(),
+  truncated: z.number().int(),
+  observed_at: z.string(),
+});
+
+const agentRunActivityRowFromRow = (value: unknown): AgentRunActivityRow => {
+  const row = agentRunActivityEntryRowSchema.parse(value);
+  return {
+    id: row.id,
+    seq: row.seq,
+    observedAt: row.observed_at,
+    provider: row.provider,
+    kind: row.kind,
+    label: row.label,
+    detail: row.detail,
+    status: row.status,
+    truncated: row.truncated === 1,
+  };
+};
 
 const criterionRowSchema = z.object({ criterion: z.string() });
 
@@ -1494,6 +1542,15 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
   z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_AGENT_RUN_ACTIVITY"),
+      agentRunId: opaqueIdSchema,
+      // 2_000, not the table's own 1_000-row bound: a caller reading the buffer at its cap must
+      // still be able to ask for "everything held" without the query schema refusing the number.
+      limit: z.number().int().min(1).max(2_000).default(200),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_QA_STATE"), pipelineRunId: opaqueIdSchema }).strict(),
   z
@@ -4071,6 +4128,57 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       "SELECT * FROM agent_runs WHERE stage_attempt_id = ? ORDER BY ordinal DESC, rowid DESC LIMIT 1",
     );
     const selectAgentRunById = database.prepare("SELECT * FROM agent_runs WHERE id = ?");
+    // Step 1 of RECORD_AGENT_RUN_ACTIVITY: claim the next per-run sequence number, creating the
+    // counters row on first use. Runs on every write, including one that step 2 below merges into
+    // an existing row, which is why `seq` is monotonic but not dense.
+    const claimAgentRunActivitySeq = database.prepare(
+      `INSERT INTO agent_run_activity_state (agent_run_id, schema_version, next_seq, omitted_count, degraded)
+       VALUES (?, 1, 1, 0, 0)
+       ON CONFLICT (agent_run_id) DO UPDATE SET next_seq = next_seq + 1
+       RETURNING next_seq`,
+    );
+    // Step 2: create the entry, or fold a terminal report into the row its start already created.
+    // The ON CONFLICT branch never overwrites a non-null label/detail with null -- a terminal report
+    // adds an outcome, it does not erase the starting observation.
+    const upsertAgentRunActivityEntry = database.prepare(
+      `INSERT INTO agent_run_activity (
+         id, schema_version, project_id, work_item_id, agent_run_id, provider_session_id,
+         seq, action_key, provider, kind, label, detail, status, truncated, observed_at
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (provider_session_id, action_key) DO UPDATE SET
+         status = COALESCE(excluded.status, agent_run_activity.status),
+         label = COALESCE(agent_run_activity.label, excluded.label),
+         detail = COALESCE(agent_run_activity.detail, excluded.detail),
+         truncated = max(agent_run_activity.truncated, excluded.truncated)
+       RETURNING id, seq`,
+    );
+    // Step 3: evict the oldest rows past the bound and count what was dropped, honestly, in the
+    // per-run counters rather than silently.
+    const evictOldestAgentRunActivity = database.prepare(
+      `DELETE FROM agent_run_activity
+       WHERE id IN (
+         SELECT id FROM agent_run_activity
+         WHERE agent_run_id = ?
+         ORDER BY seq ASC
+         LIMIT max(0, (SELECT count(*) FROM agent_run_activity WHERE agent_run_id = ?) - 1000)
+       )`,
+    );
+    const addAgentRunActivityOmittedCount = database.prepare(
+      `UPDATE agent_run_activity_state
+       SET omitted_count = omitted_count + ?
+       WHERE agent_run_id = ?
+       RETURNING omitted_count, degraded`,
+    );
+    const selectAgentRunActivityEntries = database.prepare(
+      `SELECT id, seq, provider, kind, label, detail, status, truncated, observed_at
+       FROM agent_run_activity
+       WHERE agent_run_id = ?
+       ORDER BY observed_at, id
+       LIMIT ?`,
+    );
+    const selectAgentRunActivityState = database.prepare(
+      "SELECT next_seq, omitted_count, degraded FROM agent_run_activity_state WHERE agent_run_id = ?",
+    );
     const selectLatestSucceededDeveloperAgentRun = database.prepare(
       `SELECT * FROM agent_runs
        WHERE pipeline_run_id = ? AND profile_role = 'DEVELOPER' AND status = 'SUCCEEDED'
@@ -12815,6 +12923,77 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "RECORD_AGENT_RUN_ACTIVITY") {
+        // Daemon-internal, same as RECORD_PROVIDER_USAGE: the activity buffer carries no
+        // authority, but it still must not be forgeable by an arbitrary caller.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN",
+            "Only the provider session loop can record agent run activity",
+          );
+        }
+        // R3: the payload carries only `agentRunId`; `project_id`/`work_item_id` are derived from
+        // the AgentRun's own row inside this transaction rather than trusted from a second,
+        // potentially divergent copy. A plain row parse is enough -- unlike `agentRunFromRow`, this
+        // write needs neither the full domain object nor its policy-snapshot hash check.
+        const agentRunValue = selectAgentRunById.get(command.payload.agentRunId);
+        if (agentRunValue === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The AgentRun does not exist");
+        }
+        const agentRunRow = agentRunRowSchema.parse(agentRunValue);
+        const sessionValue = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionValue === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const sessionRow = providerSessionRowSchema.parse(sessionValue);
+        if (sessionRow.agent_run_id !== command.payload.agentRunId) {
+          throw new WorkflowDomainError(
+            "WORKFLOW_NOT_FOUND",
+            "The ProviderSession does not belong to this AgentRun",
+          );
+        }
+
+        const claim = agentRunActivityClaimRowSchema.parse(
+          claimAgentRunActivitySeq.get(command.payload.agentRunId),
+        );
+        const entry = command.payload.entry;
+        const upserted = agentRunActivityUpsertedRowSchema.parse(
+          upsertAgentRunActivityEntry.get(
+            createId("agentRunActivity"),
+            agentRunRow.project_id,
+            agentRunRow.work_item_id,
+            command.payload.agentRunId,
+            command.payload.providerSessionId,
+            claim.next_seq,
+            entry.actionKey,
+            command.payload.provider,
+            entry.kind,
+            entry.label,
+            entry.detail,
+            entry.status,
+            entry.truncated ? 1 : 0,
+            occurredAt,
+          ),
+        );
+        const eviction = evictOldestAgentRunActivity.run(
+          command.payload.agentRunId,
+          command.payload.agentRunId,
+        );
+        const counters = agentRunActivityCountersRowSchema.parse(
+          addAgentRunActivityOmittedCount.get(eviction.changes, command.payload.agentRunId),
+        );
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RECORDED",
+          replayed: false,
+          entryId: upserted.id,
+          seq: upserted.seq,
+          omittedCount: counters.omitted_count,
+          degraded: counters.degraded === 1,
+        });
+      }
+
       if (command.type === "PUBLISH_CHECKPOINT") {
         const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
         if (sessionRow === undefined) {
@@ -14355,6 +14534,21 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   )
                   .all(queryValue.status, queryValue.limit);
           return { type: "AGENT_RUNS", runs: rows.map(agentRunFromRow) };
+        }
+        case "LIST_AGENT_RUN_ACTIVITY": {
+          const entries = selectAgentRunActivityEntries
+            .all(queryValue.agentRunId, queryValue.limit)
+            .map(agentRunActivityRowFromRow);
+          const stateValue = selectAgentRunActivityState.get(queryValue.agentRunId);
+          // No counters row means RECORD_AGENT_RUN_ACTIVITY has never written for this run: nothing
+          // was ever omitted and the feed cannot be degraded, not an absence worth erroring on.
+          const state = stateValue === undefined ? null : agentRunActivityStateRowSchema.parse(stateValue);
+          return {
+            type: "AGENT_RUN_ACTIVITY",
+            entries,
+            omittedCount: state === null ? 0 : state.omitted_count,
+            degraded: state === null ? false : state.degraded === 1,
+          };
         }
         case "LIST_REVIEW_REPORTS":
           return {
