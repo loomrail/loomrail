@@ -1058,6 +1058,10 @@ Expected: FAIL.
 
 - [ ] **Шаг 3: Реализовать `onActivity` в литерале листенера**
 
+`onActivity` runs inside the adapter's stdout handler. It must do as little as possible there and it must
+not touch the database: it validates, redacts and **enqueues**. A separate drain writes the queue outside the
+hot path. Spec §Надёжность requires exactly this shape.
+
 Добавить в объект `listener` рядом с `onProcessStarted`:
 
 ```ts
@@ -1071,34 +1075,82 @@ Expected: FAIL.
           );
           return;
         }
-        // Same guard as `onProcessStarted`: this runs synchronously inside the adapter's stdout
-        // handler, where a throw kills the child and fails the session. Losing the diagnostic is
-        // the correct outcome; killing the run it was diagnosing is not.
+        // Bounded on purpose: a provider that outruns the drain loses the newest entries rather
+        // than growing this queue without limit inside a long-running daemon. Dropping marks the
+        // feed degraded, which is the honest outcome -- an unbounded queue would trade a visibly
+        // incomplete feed for an invisible memory leak.
+        if (live.activityQueue.length >= ACTIVITY_QUEUE_LIMIT) {
+          live.activityDegraded = true;
+          return;
+        }
+        live.activityQueue.push(sanitizeEntry(validated.data));
+        scheduleActivityDrain();
+      },
+```
+
+Дренаж живёт рядом и выполняется вне обработчика stdout — на таймере, который `unref`'ится, и один раз
+принудительно при завершении сессии, чтобы хвост очереди не потерялся:
+
+```ts
+      const drainActivityQueue = (): void => {
+        const pending = live.activityQueue.splice(0, live.activityQueue.length);
+        for (const entry of pending) {
+          try {
+            deps.state.execute({
+              schemaVersion: 1,
+              commandId: `activity-${providerSession.id}-${entry.actionKey}-${entry.terminal ? "end" : "start"}`,
+              correlationId: deps.correlationId,
+              actor,
+              type: "RECORD_AGENT_RUN_ACTIVITY",
+              payload: {
+                agentRunId,
+                providerSessionId: providerSession.id,
+                provider: invocationProvider,
+                entry,
+              },
+            });
+          } catch (error: unknown) {
+            // One failed entry must not abandon the rest of the queue, and must never reach the
+            // caller: the drain runs on a timer, where a throw would be an unhandled rejection.
+            markActivityDegraded();
+            deps.logger.debug(
+              { providerSessionId: providerSession.id, error: errorName(error) },
+              "An action could not be recorded; the activity feed for this run is degraded",
+            );
+          }
+        }
+        if (pending.length > 0) publishActivitySignal();
+      };
+```
+
+- [ ] **Шаг 3a: Пометить ленту `degraded` сразу, а не только в конце**
+
+`markActivityDegraded` ставит флаг в памяти **и** пишет `degraded = 1` в `agent_run_activity_state` собственной
+короткой транзакцией, при первом переходе флага. Собственной — потому что транзакция, которая упала, откатилась и
+записать собственный провал не может; а откладывать отметку до конца сессии значит показывать владельцу живую ленту
+как полную ровно тогда, когда он на неё смотрит. Сама эта запись тоже best-effort: её отказ ничего не роняет.
+
+```ts
+      const markActivityDegraded = (): void => {
+        if (live.activityDegraded) return;
+        live.activityDegraded = true;
         try {
           deps.state.execute({
             schemaVersion: 1,
-            commandId: `activity-${providerSession.id}-${validated.data.actionKey}-${validated.data.terminal ? "end" : "start"}`,
+            commandId: `activity-degraded-${providerSession.id}`,
             correlationId: deps.correlationId,
             actor,
-            type: "RECORD_AGENT_RUN_ACTIVITY",
-            payload: {
-              agentRunId,
-              providerSessionId: providerSession.id,
-              provider: invocationProvider,
-              entry: validated.data,
-            },
+            type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
+            payload: { agentRunId },
           });
-        } catch (error: unknown) {
-          live.activityDegraded = true;
-          deps.logger.debug(
-            { providerSessionId: providerSession.id, error: errorName(error) },
-            "An action could not be recorded; the activity feed for this run is degraded",
-          );
-          return;
+        } catch {
+          // Nothing left to do: the feed is degraded and we could not even say so. The in-memory
+          // flag still makes the session-end write try again.
         }
-        publishActivitySignal();
-      },
+      };
 ```
+
+Эта команда добавляется в Task 6 тем же способом, что и `RECORD_AGENT_RUN_ACTIVITY` — контракт, обработчик, тест.
 
 - [ ] **Шаг 3b: Редактировать и нормализовать перед записью**
 
@@ -1127,6 +1179,24 @@ const sanitizeEntry = (entry: ProviderActivityEntry): ProviderActivityEntry => {
 пределы worktree, и живёт рядом с recorder, а не в адаптере: адаптер не знает, где worktree.
 
 Тест на это добавляется в Task 11 вместе с канарейкой.
+
+- [ ] **Шаг 3c: Константы и планировщик дренажа**
+
+Рядом с прочими константами модуля:
+
+```ts
+// How long the recorder lets entries accumulate before writing them. Long enough that a burst of
+// tool calls becomes a handful of writes instead of one per line; short enough that the owner
+// watching a live run sees the feed move.
+const ACTIVITY_DRAIN_INTERVAL_MS = 250;
+// The queue is a buffer, not a backlog: a provider that outruns the drain by this much is losing
+// entries, and the feed says so rather than letting a long session grow this array unboundedly.
+const ACTIVITY_QUEUE_LIMIT = 500;
+```
+
+`scheduleActivityDrain` — тот же одноразовый таймер, что и у сигнала: если дренаж уже запланирован, повторный вызов
+ничего не делает; таймер `unref`'ится, чтобы не держать демон живым; при завершении сессии дренаж вызывается
+принудительно один раз, чтобы хвост очереди не потерялся вместе с сессией.
 
 - [ ] **Шаг 4: Добавить дебаунс сигнала**
 
