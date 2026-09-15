@@ -1378,6 +1378,9 @@ const en = {
   "runActivity.kind.AGENT_TEXT": "Agent note",
   "runActivity.kind.FILE_CHANGE": "File change",
   "runActivity.kind.PROVIDER_ERROR": "Provider error",
+  // Group heading for one run's consecutive entries in the expanded list -- paired with the
+  // existing `stage.*` label (spec: "каждая группа названа стадией и порядковым номером прогона").
+  "runActivity.group.ordinal": "Run {ordinal}",
   "runActivity.count": "{count}",
   "runActivity.countMore": "{count}+",
   "runActivity.loading": "Loading run activity…",
@@ -2777,6 +2780,7 @@ const ru = {
   "runActivity.kind.AGENT_TEXT": "Заметка агента",
   "runActivity.kind.FILE_CHANGE": "Изменение файла",
   "runActivity.kind.PROVIDER_ERROR": "Ошибка провайдера",
+  "runActivity.group.ordinal": "Прогон {ordinal}",
   "runActivity.count": "{count}",
   "runActivity.countMore": "{count}+",
   "runActivity.loading": "Загружаем действия агента…",

@@ -22,6 +22,8 @@ const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivity
   status: "SUCCEEDED",
   failureCode: null,
   truncated: false,
+  agentRunId: "run-1",
+  stage: "IMPLEMENT",
   ...overrides,
 });
 
@@ -88,6 +90,82 @@ describe("RunActivityView", () => {
     // latest entry's own heading text ahead of the list for an unrelated reason).
     const list = html.slice(html.indexOf("run-activity__entries"));
     expect(list.indexOf("Read file")).toBeLessThan(list.indexOf("Write file"));
+  });
+
+  // Spec 128: "записи сгруппированы по прогону, каждая группа названа стадией и порядковым номером
+  // прогона". Two runs, each contributing consecutive entries -- the grouping guard this exercises
+  // is "one group per run, headed by that run's own stage and ordinal", not merely "every entry
+  // renders somewhere". A mutant that labelled every group with the FIRST entry's stage (instead of
+  // each group's own) would still pass every other test in this file but fails this one, because
+  // "Review" would never appear at all.
+  it("groups consecutive entries by run, each group named by its own run's stage and ordinal", () => {
+    const html = renderView({
+      entries: [
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
+        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
+        entry({ id: "a3", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
+      ],
+      expanded: true,
+    });
+
+    expect((html.match(/run-activity__group"/g) ?? []).length).toBe(2);
+    expect(html).toContain("Run 1");
+    expect(html).toContain("Run 2");
+    // Scoped to the expanded entry LIST, not the collapsed summary above it -- the summary
+    // legitimately previews the task's latest action (here, also "List directory") ahead of the
+    // list, for an unrelated reason (see the "collapses to the latest action" tests below).
+    const list = html.slice(html.indexOf("run-activity__entries"));
+    expect(list).toContain("Implementation");
+    expect(list).toContain("Review");
+    // The stage heading for run-2's group must appear before run-2's own entry and after both of
+    // run-1's -- proving the heading text sits with the right group, not just present somewhere.
+    const implementationIndex = list.indexOf("Implementation");
+    const reviewIndex = list.indexOf("Review");
+    const readIndex = list.indexOf("Read file");
+    const writeIndex = list.indexOf("Write file");
+    const listDirectoryIndex = list.indexOf("List directory");
+    expect(implementationIndex).toBeLessThan(readIndex);
+    expect(writeIndex).toBeLessThan(reviewIndex);
+    expect(reviewIndex).toBeLessThan(listDirectoryIndex);
+  });
+
+  // The spec's grouping rule is "consecutive entries sharing an agentRunId", not "every entry
+  // sharing an agentRunId, wherever it appears". A naive `groupBy(agentRunId)` implementation would
+  // fuse the two run-1 spans below back into one group and print "Run 1" once; this fixture can only
+  // pass if the grouping walks the list in order and starts a new group the moment run-2's entry
+  // interrupts run-1's own run. The ordinal itself, though, stays keyed by agentRunId (not by which
+  // group instance it is) -- both run-1 groups must say "Run 1", never "Run 1" and "Run 3".
+  it("starts a new group when the same run's entries are not consecutive, but keeps its ordinal stable", () => {
+    const html = renderView({
+      entries: [
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
+        entry({ id: "a2", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
+        entry({ id: "a3", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
+      ],
+      expanded: true,
+    });
+
+    expect((html.match(/run-activity__group"/g) ?? []).length).toBe(3);
+    expect((html.match(/Run 1/g) ?? []).length).toBe(2);
+    expect(html).not.toContain("Run 3");
+  });
+
+  // "Свёрнутая сводка показывает последнее действие по задаче" -- across the whole task, not just
+  // the earliest run's own tail. Without a live Agent Fleet hint, the collapsed summary falls back
+  // to the merged feed's own last entry; this fixture makes that entry belong to the SECOND run, so
+  // a container-level regression that scoped the summary to only the first/current run's entries
+  // (the bug this task fixes) would show "Write file" here instead of "List directory".
+  it("collapses to the latest action across the whole task, not one run's own tail", () => {
+    const html = renderView({
+      entries: [
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
+        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
+        entry({ id: "a3", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
+      ],
+    });
+
+    expect(html).toContain("List directory");
+    expect(html).not.toContain("Write file");
   });
 
   it("distinguishes a daemon-audited action from a provider report without relying on colour", () => {
