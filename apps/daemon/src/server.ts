@@ -215,6 +215,7 @@ import {
   REPORTED_ENTRIES_FETCH_LIMIT,
   type ActivityCursor,
 } from "./agent-run-activity.js";
+import { cleanupExpiredAgentRunActivity } from "./agent-run-activity-retention.js";
 import { broadcastingState } from "./broadcasting-state.js";
 import { resolveProjectBrowserQAConfig, type BrowserQAConfigResolver } from "./browser-qa-config.js";
 import { reconcileBrowserQAArtifacts } from "./browser-qa-recovery.js";
@@ -1122,6 +1123,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
   await cleanupExpiredVerificationOutputs({
     state: localState,
     artifactsDirectory: verificationArtifactsDirectory,
+    now: now(),
+    logger: app.log,
+  });
+  cleanupExpiredAgentRunActivity({
+    state: localState,
     now: now(),
     logger: app.log,
   });

@@ -4,6 +4,8 @@ import { agentRunClaimLimitsSchema, agentRunSchema, squadAssignmentSchema } from
 import {
   agentRunActivityDegradedMarkedResultSchema,
   agentRunActivityRecordedResultSchema,
+  agentRunActivityRetentionAppliedResultSchema,
+  deleteExpiredAgentRunActivityCommandSchema,
   markAgentRunActivityDegradedCommandSchema,
   recordAgentRunActivityCommandSchema,
 } from "./activity.js";
@@ -760,6 +762,7 @@ export const stateCommandSchema = z.discriminatedUnion("type", [
   finishWorkspaceToolCallCommandSchema,
   recordAgentRunActivityCommandSchema,
   markAgentRunActivityDegradedCommandSchema,
+  deleteExpiredAgentRunActivityCommandSchema,
 ]);
 
 const commandResultBaseSchema = z
@@ -902,6 +905,7 @@ export const stateCommandResultSchema = z.discriminatedUnion("type", [
   workspaceToolCallChangedResultSchema,
   agentRunActivityRecordedResultSchema,
   agentRunActivityDegradedMarkedResultSchema,
+  agentRunActivityRetentionAppliedResultSchema,
 ]);
 
 export const registerFixtureProjectRequestSchema = z

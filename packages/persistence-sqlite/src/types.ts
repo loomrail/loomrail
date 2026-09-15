@@ -109,6 +109,10 @@ export type StateStoreErrorCode =
   | "QA_STABLE_TREE_MISSING"
   | "QA_ATTACHMENT_NOT_FOUND"
   | "QA_RETENTION_ACTOR_FORBIDDEN"
+  // DELETE_EXPIRED_AGENT_RUN_ACTIVITY is daemon-internal, same rationale as
+  // VERIFICATION_RETENTION_ACTOR_FORBIDDEN/QA_RETENTION_ACTOR_FORBIDDEN: only apps/daemon's own
+  // startup sweep may prune this table, never a caller of the general command surface.
+  | "AGENT_RUN_ACTIVITY_RETENTION_ACTOR_FORBIDDEN"
   | "VERIFICATION_RUN_ALREADY_ACTIVE"
   | "VERIFICATION_RUN_NOT_FOUND"
   | "VERIFICATION_CHECK_NOT_FOUND"
@@ -283,6 +287,17 @@ export type StateQuery =
       type: "LIST_LATEST_AGENT_RUN_ACTIVITY";
       agentRunIds: readonly string[];
     }
+  | {
+      // SD-004's sweep, read side: `agent_run_activity` rows whose AgentRun belongs to a WorkItem
+      // that reached a terminal state at least `closedBefore` ago -- same "closed" join QA's
+      // LIST_EXPIRED_QA_ATTACHMENTS already uses (through the WorkItem's own closure Event, not a
+      // second notion of "closed" derived from `updated_at`). Bounded like every other
+      // LIST_EXPIRED_... query so apps/daemon's startup sweep never has to consider an unbounded
+      // backlog in one call.
+      type: "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES";
+      closedBefore: string;
+      limit?: number;
+    }
   | { type: "GET_QA_RUN"; qaRunId: string }
   | { type: "GET_QA_STATE"; pipelineRunId: string }
   | { type: "LIST_EXPIRED_QA_ATTACHMENTS"; closedBefore: string; limit?: number }
@@ -439,6 +454,7 @@ export type StateQueryResult =
       degraded: boolean;
     }
   | { type: "LATEST_AGENT_RUN_ACTIVITY"; entries: LatestAgentRunActivityEntry[] }
+  | { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES"; entryIds: string[] }
   | { type: "QA_RUN"; qaRun: QARun | null }
   | {
       type: "QA_STATE";

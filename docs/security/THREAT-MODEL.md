@@ -2533,11 +2533,28 @@ Required verification, all present:
 - `e2e/run-activity.spec.ts` — the section is collapsed and absent from the DOM until expanded, the audited write
   appears exactly once and not in the lifecycle Activity timeline, and a provider-reported entry appends live to
   an already-rendered list through the channel alone.
+- `packages/persistence-sqlite/test/agent-run-activity-retention.integration.test.ts` — the SD-004 sweep, against
+  a real database: activity for a still-open WorkItem is never selected or deleted however old; activity closed
+  within the 30-day window is not selected; activity closed long ago is deleted along with its now-empty
+  `agent_run_activity_state` row; both the query and the delete are bounded to `limit` rows per call and leave a
+  partially-swept run's counters row alone until it is actually empty; a run whose recorder never wrote an entry
+  still has its orphaned counters row swept; running the delete twice over the same window is a no-op the second
+  time; a non-daemon actor is rejected and deletes nothing.
+- `apps/daemon/test/agent-run-activity-retention.unit.test.ts` — the startup orchestration, against a fake
+  LocalState: `closedBefore` is exactly 30 days before the injected `now`; an empty first page skips `execute`
+  entirely; a backlog that never returns a short page is still cut off at the batch cap; the completion log line
+  is emitted only when something was actually deleted.
 
 Residual risk: the feed is untrusted text the owner reads, and a provider can fill it with plausible but false
 claims about its own work; it is labelled as such and proves nothing. It is also incomplete by construction —
 eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and only the
 first three of those set `degraded`. Every recorded entry costs one row in the append-only `commands` receipt
-table, which has no retention, and the activity table itself has no age-based cleanup: its only bound is the
-1,000-entry per-run cap. Raw provider stdout/stderr, and any owner opt-in to capture it, remain out of scope and
-would need their own decision.
+table, which has no retention. The activity table itself is now aged out by `cleanupExpiredAgentRunActivity`
+(`apps/daemon/src/agent-run-activity-retention.ts`, SD-004): at daemon startup, `agent_run_activity` rows — and
+the `agent_run_activity_state` counters row a run's last entry leaves behind — are deleted once their AgentRun's
+WorkItem has been closed (`DONE`/`CANCELLED`) for at least 30 days, read off the WorkItem's own terminal Event
+the same way `LIST_EXPIRED_QA_ATTACHMENTS` already does. Activity for a WorkItem still open is never touched,
+however old. The sweep is bounded — 1,000 rows per batch, at most 20 batches per startup, the same shape as the
+Browser QA and Project verification output sweeps it sits beside — so a backlog larger than that drains over
+several restarts rather than delaying one, and a daemon that is never restarted never sweeps. Raw provider
+stdout/stderr, and any owner opt-in to capture it, remain out of scope and would need their own decision.

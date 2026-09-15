@@ -198,9 +198,16 @@ nothing interprets it as Markdown, HTML or a link.
   control characters and rendered as text, but it is still the provider's own words on the owner's screen, and
   it is the first such surface outside the checkpoint and report paths.
 - There is a new table outside the append-only history, with its own retention rules: rows are updated in
-  place and evicted. Its only implemented bound is the 1,000-entry per-run cap. The age-based cleanup SD-004
-  describes for unpinned diagnostic data is not wired to this table, so a long-lived database keeps up to
-  1,000 entries per AgentRun indefinitely.
+  place and evicted. The 1,000-entry per-run cap bounds one AgentRun's feed regardless of age. SD-004's
+  age-based cleanup for unpinned diagnostic data is wired separately: `cleanupExpiredAgentRunActivity`
+  (`apps/daemon/src/agent-run-activity-retention.ts`) runs once at daemon startup, alongside the Browser QA and
+  Project verification output sweeps it mirrors, and deletes `agent_run_activity` rows — and the
+  `agent_run_activity_state` counters row a run's last entry leaves behind — once the row's AgentRun belongs to
+  a WorkItem closed (`DONE`/`CANCELLED`) at least 30 days ago. "Closed" is read off the WorkItem's own terminal
+  Event, the same join `LIST_EXPIRED_QA_ATTACHMENTS` already uses, not a second definition. The sweep never
+  touches activity for a WorkItem still open, however old the entries are. It is bounded like its two
+  siblings — 1,000 rows per batch, at most 20 batches per startup — so a large backlog spreads across
+  restarts instead of delaying one. A daemon that is never restarted never sweeps.
 - Every recorded entry costs one receipt row in the append-only `commands` table, and an action that reports
   twice costs two. This is an accepted known limit, not an oversight: an audited workspace tool call already
   writes two commands of its own — `START_WORKSPACE_TOOL_CALL` and `FINISH_WORKSPACE_TOOL_CALL`, one receipt

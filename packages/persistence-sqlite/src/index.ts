@@ -466,6 +466,10 @@ const agentRunActivityStateRowSchema = z.object({
   degraded: z.number().int(),
 });
 
+// SD-004's sweep, read side: `selectExpiredAgentRunActivityEntries` selects nothing but the id --
+// the daemon orchestrator only ever needs the count and, on the next call, a fresh page.
+const agentRunActivityRetentionCandidateRowSchema = z.object({ id: z.string() });
+
 const agentRunActivityEntryRowSchema = z.object({
   id: z.string(),
   seq: z.number().int(),
@@ -1590,6 +1594,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       // Bounded at the Fleet's own cap, its only caller today: no read of this ever needs more
       // AgentRun ids than the Fleet can show at once.
       agentRunIds: z.array(opaqueIdSchema).max(maxAgentFleetEntries),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES"),
+      closedBefore: utcTimestampSchema,
+      limit: z.number().int().min(1).max(1_000).default(200),
     })
     .strict(),
   z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
@@ -4287,6 +4298,95 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        SELECT agent_run_id, id, at, origin_rank, label, detail, status
        FROM ranked
        WHERE rn = 1`,
+    );
+    // SD-004's sweep for `agent_run_activity` (Task 13). Same "closed" join as
+    // `selectExpiredQAAttachmentRefs` below -- through the WorkItem's own closure Event, not
+    // `work_items.updated_at` -- deliberately: two notions of "closed" in one codebase is how
+    // retention policies drift apart, and this table reaches its WorkItem one hop further
+    // (`agent_run_activity` -> `agent_runs.work_item_id`) than QA's own attachments do.
+    const selectExpiredAgentRunActivityEntries = database.prepare(
+      `SELECT agent_run_activity.id
+       FROM agent_run_activity
+       INNER JOIN agent_runs ON agent_runs.id = agent_run_activity.agent_run_id
+       INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+       INNER JOIN events AS closure_event ON closure_event.sequence = (
+         SELECT MAX(history.sequence) FROM events AS history
+         WHERE history.aggregate_id = work_items.id
+           AND (
+             history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+             OR (
+               history.type = 'WORK_ITEM_STATE_CHANGED'
+               AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+             )
+           )
+       )
+       WHERE work_items.state IN ('DONE', 'CANCELLED')
+         AND closure_event.occurred_at <= ?
+       ORDER BY closure_event.occurred_at, agent_run_activity.observed_at, agent_run_activity.id
+       LIMIT ?`,
+    );
+    // The delete side of the same read: identical predicate, so what this removes is exactly what
+    // the LIST query above just reported as selected -- re-run here rather than threading the
+    // LIST result's ids back in through a hand-built `IN (?, ?, ...)` placeholder list (the pattern
+    // `selectLatestAgentRunActivity`'s own doc comment above calls out as worth avoiding).
+    const deleteExpiredAgentRunActivityEntries = database.prepare(
+      `DELETE FROM agent_run_activity
+       WHERE id IN (
+         SELECT agent_run_activity.id
+         FROM agent_run_activity
+         INNER JOIN agent_runs ON agent_runs.id = agent_run_activity.agent_run_id
+         INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+         INNER JOIN events AS closure_event ON closure_event.sequence = (
+           SELECT MAX(history.sequence) FROM events AS history
+           WHERE history.aggregate_id = work_items.id
+             AND (
+               history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+               OR (
+                 history.type = 'WORK_ITEM_STATE_CHANGED'
+                 AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+               )
+             )
+         )
+         WHERE work_items.state IN ('DONE', 'CANCELLED')
+           AND closure_event.occurred_at <= ?
+         ORDER BY closure_event.occurred_at, agent_run_activity.observed_at, agent_run_activity.id
+         LIMIT ?
+       )`,
+    );
+    // A run's counters row (`omitted_count`/`degraded`) outlives its entries only while some of
+    // them remain to describe. Once the WorkItem behind an AgentRun is closed-and-expired AND
+    // nothing is left in `agent_run_activity` for it -- whether this same transaction's delete
+    // above just emptied it, an earlier startup's sweep already did, or the recorder's first write
+    // failed before any entry ever existed (MARK_AGENT_RUN_ACTIVITY_DEGRADED can create this row
+    // with zero entries) -- the row describes nothing a reader can still see and is pruned with it,
+    // so LIST_AGENT_RUN_ACTIVITY on a fully swept run reads as "nothing here" rather than stale
+    // counters left orphaned forever.
+    const deleteExpiredAgentRunActivityState = database.prepare(
+      `DELETE FROM agent_run_activity_state
+       WHERE agent_run_id IN (
+         SELECT agent_run_activity_state.agent_run_id
+         FROM agent_run_activity_state
+         INNER JOIN agent_runs ON agent_runs.id = agent_run_activity_state.agent_run_id
+         INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+         INNER JOIN events AS closure_event ON closure_event.sequence = (
+           SELECT MAX(history.sequence) FROM events AS history
+           WHERE history.aggregate_id = work_items.id
+             AND (
+               history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+               OR (
+                 history.type = 'WORK_ITEM_STATE_CHANGED'
+                 AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+               )
+             )
+         )
+         WHERE work_items.state IN ('DONE', 'CANCELLED')
+           AND closure_event.occurred_at <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM agent_run_activity
+             WHERE agent_run_activity.agent_run_id = agent_run_activity_state.agent_run_id
+           )
+         LIMIT ?
+       )`,
     );
     const selectLatestSucceededDeveloperAgentRun = database.prepare(
       `SELECT * FROM agent_runs
@@ -13144,6 +13244,37 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         });
       }
 
+      if (command.type === "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
+        // Daemon-internal, same rationale as RECORD_QA_ATTACHMENT_RETENTION /
+        // RECORD_VERIFICATION_OUTPUT_RETENTION: only the local daemon's own startup sweep may prune
+        // this table, never an arbitrary caller of the general command surface.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_RETENTION_ACTOR_FORBIDDEN",
+            "Only the local daemon can prune expired agent run activity",
+          );
+        }
+        // Deleting the entries first means the state-row delete below -- running in the same
+        // transaction -- already sees this call's own deletions when it checks which runs now have
+        // nothing left in `agent_run_activity`, not just what earlier calls left behind.
+        const entries = deleteExpiredAgentRunActivityEntries.run(
+          command.payload.closedBefore,
+          command.payload.limit,
+        );
+        const state = deleteExpiredAgentRunActivityState.run(
+          command.payload.closedBefore,
+          command.payload.limit,
+        );
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
+          replayed: false,
+          entriesDeleted: entries.changes,
+          stateRowsDeleted: state.changes,
+        });
+      }
+
       if (command.type === "PUBLISH_CHECKPOINT") {
         const sessionRow = selectProviderSessionById.get(command.payload.providerSessionId);
         if (sessionRow === undefined) {
@@ -14716,6 +14847,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                 : selectLatestAgentRunActivity
                     .all(JSON.stringify(queryValue.agentRunIds))
                     .map(latestAgentRunActivityFromRow),
+          };
+        case "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES":
+          return {
+            type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES",
+            entryIds: selectExpiredAgentRunActivityEntries
+              .all(queryValue.closedBefore, queryValue.limit)
+              .map((value) => agentRunActivityRetentionCandidateRowSchema.parse(value).id),
           };
         case "LIST_REVIEW_REPORTS":
           return {

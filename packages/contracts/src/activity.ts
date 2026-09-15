@@ -1,7 +1,13 @@
 import { z } from "zod";
 
 import { liveProviderIdSchema } from "./provider-selection.js";
-import { actorSchema, correlationIdSchema, opaqueIdSchema, schemaVersionSchema } from "./shared.js";
+import {
+  actorSchema,
+  correlationIdSchema,
+  opaqueIdSchema,
+  schemaVersionSchema,
+  utcTimestampSchema,
+} from "./shared.js";
 import { workspaceToolFailureCodeSchema } from "./workspace-tool.js";
 
 /**
@@ -181,3 +187,41 @@ export const agentRunActivityDegradedMarkedResultSchema = commandResultBaseSchem
 
 export type MarkAgentRunActivityDegradedCommand = z.infer<typeof markAgentRunActivityDegradedCommandSchema>;
 export type AgentRunActivityDegradedMarkedResult = z.infer<typeof agentRunActivityDegradedMarkedResultSchema>;
+
+/**
+ * SD-004's 30-day sweep for `agent_run_activity`: bounded per call by `limit`, and per call means
+ * per orchestrator batch, not per row, so this deletes a whole page of expired entries (and any
+ * `agent_run_activity_state` counters row a page just emptied) in one short transaction rather than
+ * apps/daemon issuing one command per row the way RECORD_QA_ATTACHMENT_RETENTION does for files.
+ *
+ * That precedent needs a per-row command because deleting a file is neither idempotent nor visible
+ * from the database, so it records an outcome per attachment to avoid re-attempting or re-counting
+ * one on a retry. A row delete carries neither problem: the row's own absence on a later sweep IS
+ * the record, so this command needs no retention log and no per-row identity in its payload --
+ * `closedBefore`/`limit` describe the same bounded page apps/daemon just read with
+ * LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES, not a list of ids to thread through a hand-built SQL
+ * `IN (?, ?, ...)` -- the pattern `selectLatestAgentRunActivity`'s own doc comment in
+ * packages/persistence-sqlite calls out as worth avoiding.
+ */
+export const deleteExpiredAgentRunActivityCommandSchema = commandBaseSchema.extend({
+  type: z.literal("DELETE_EXPIRED_AGENT_RUN_ACTIVITY"),
+  payload: z
+    .object({
+      closedBefore: utcTimestampSchema,
+      limit: z.number().int().min(1).max(1_000),
+    })
+    .strict(),
+});
+
+// No `event`: same reasoning as AGENT_RUN_ACTIVITY_RECORDED -- this table carries no authority, so
+// pruning it does not enter the append-only Event vocabulary either.
+export const agentRunActivityRetentionAppliedResultSchema = commandResultBaseSchema.extend({
+  type: z.literal("AGENT_RUN_ACTIVITY_RETENTION_APPLIED"),
+  entriesDeleted: z.number().int().nonnegative(),
+  stateRowsDeleted: z.number().int().nonnegative(),
+});
+
+export type DeleteExpiredAgentRunActivityCommand = z.infer<typeof deleteExpiredAgentRunActivityCommandSchema>;
+export type AgentRunActivityRetentionAppliedResult = z.infer<
+  typeof agentRunActivityRetentionAppliedResultSchema
+>;
