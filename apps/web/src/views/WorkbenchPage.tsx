@@ -75,7 +75,11 @@ import {
 } from "@loomrail/ui";
 
 import { ChangesSection } from "./ChangesSection";
-import { isWorkItemTimelineEvent, type WorkItemTimelineEvent } from "./workItemTimeline";
+import {
+  isWorkItemTimelineEvent,
+  shouldKeepPagingForLifecycleEvent,
+  type WorkItemTimelineEvent,
+} from "./workItemTimeline";
 import { workItemAcceptanceExportUrl, workItemQAAttachmentUrl } from "../api";
 import {
   defaultBoardView,
@@ -3401,11 +3405,23 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
   const loadMore = (): void => {
     void eventsQuery.fetchNextPage();
   };
+  // See shouldKeepPagingForLifecycleEvent (workItemTimeline.ts) for why this auto-pages past a raw
+  // page that filtered down to nothing, instead of showing the owner an empty list.
+  const stillSearching = shouldKeepPagingForLifecycleEvent({
+    hasLoadedFirstPage: eventsQuery.data !== undefined,
+    hasNextPage: eventsQuery.hasNextPage,
+    lifecycleEventsLoaded: events.length,
+  });
+  useEffect(() => {
+    if (stillSearching && !eventsQuery.isFetchingNextPage) {
+      void eventsQuery.fetchNextPage();
+    }
+  }, [eventsQuery, stillSearching]);
 
   return (
     <InspectorSection
       action={
-        eventsQuery.data ? (
+        eventsQuery.data && !stillSearching ? (
           <span className="inspector-step-count">
             {eventsQuery.hasNextPage ? t("task.activityCountMore", { count: events.length }) : events.length}
           </span>
@@ -3422,7 +3438,7 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
           ))}
         </ol>
       ) : null}
-      {eventsQuery.hasNextPage ? (
+      {!stillSearching && eventsQuery.hasNextPage ? (
         <Button
           className="inspector-activity__more"
           disabled={eventsQuery.isFetchingNextPage}
@@ -3433,8 +3449,10 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
           {t("task.loadMoreActivity")}
         </Button>
       ) : null}
-      {eventsQuery.isPending ? <ActivitySkeleton label={t("task.loadingActivity")} /> : null}
-      {eventsQuery.data && events.length === 0 ? (
+      {eventsQuery.isPending || stillSearching ? (
+        <ActivitySkeleton label={t("task.loadingActivity")} />
+      ) : null}
+      {eventsQuery.data && events.length === 0 && !stillSearching ? (
         <p className="inspector-copy">{t("task.noActivity")}</p>
       ) : null}
     </InspectorSection>

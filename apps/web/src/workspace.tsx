@@ -162,12 +162,15 @@ const projectWorkItemDependenciesKey = (projectId: string) =>
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
 // Nested under the same `["work-items", <id>]` prefix a WORK_ITEM channel signal invalidates
-// whole (eventStream.ts, scopesForSignal): every `WORKSPACE_TOOL_CALL_CHANGED` Event that feeds
-// this AgentRun's DAEMON_AUDITED entries already carries this work item as its aggregate, so the
-// existing signal wiring refreshes this feed for free -- no new scope needed for that side. The
-// PROVIDER_REPORTED side records no Event (activity.ts), so it has no push signal at all yet; this
-// query still catches up whenever anything else on the item invalidates the prefix, and on the
-// channel's own reconnect (`invalidateAll`).
+// whole (eventStream.ts, scopesForSignal), which is what makes BOTH sources of this feed live
+// without any change to eventStream.ts. The DAEMON_AUDITED side gets there via the ordinary
+// Event log: every `WORKSPACE_TOOL_CALL_CHANGED` Event carries this work item as its aggregate,
+// and broadcastingState publishes a WORK_ITEM signal for every committed Event. The
+// PROVIDER_REPORTED side records no Event (activity.ts) but is not silent either: the session loop
+// publishes its own debounced WORK_ITEM signal straight to the channel after each drain
+// (session-loop.ts, publishActivitySignal, called from the same place that marks a feed
+// `degraded`) -- a second, direct publish path into the same channel, not routed through the Event
+// log at all. Both land on the same scope this key sits under, so one query key covers both.
 const workItemRunActivityKey = (workItemId: string, agentRunId: string) =>
   ["work-items", workItemId, "run-activity", agentRunId] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;

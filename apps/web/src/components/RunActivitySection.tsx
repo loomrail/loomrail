@@ -12,6 +12,7 @@ import type {
 import { Badge, Button, Icon, InspectorSection, Skeleton } from "@loomrail/ui";
 
 import { LocalConnectionRecovery } from "./LocalConnectionRecovery";
+import { anyPageHasGap } from "./runActivityPaging";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import {
   useAgentFleet,
@@ -176,6 +177,8 @@ export type RunActivityViewProps = {
   gap: boolean;
   hasMore: boolean;
   loading: boolean;
+  /** A "Show more" fetch is in flight -- distinct from `loading`, which is only the first page. */
+  loadingMore: boolean;
   omittedCount: number;
   onLoadMore: () => void;
   onRetry: () => void;
@@ -191,6 +194,7 @@ export const RunActivityView = ({
   gap,
   hasMore,
   loading,
+  loadingMore,
   omittedCount,
   onLoadMore,
   onRetry,
@@ -203,11 +207,20 @@ export const RunActivityView = ({
   // loaded", but not provably "the latest, full stop" for a run with more history than one page.
   // Only once this AgentRun has left the Fleet (collapsedAction turns null -- typically because it
   // finished) does the merged feed's own last loaded entry take over.
+  //
+  // When it does, and more of the feed exists beyond this loaded page (`hasMore`), that entry is
+  // NOT provably the latest action either -- it is only the newest thing loaded so far, oldest-
+  // first, from a run with no live Fleet entry to check against. `approximate` says so instead of
+  // presenting a possibly-stale row as a confident "this is what happened last".
   const summary =
     collapsedAction !== null
-      ? { label: collapsedActionLabel(collapsedAction, t), origin: collapsedAction.origin }
+      ? {
+          approximate: false,
+          label: collapsedActionLabel(collapsedAction, t),
+          origin: collapsedAction.origin,
+        }
       : latestEntry !== undefined
-        ? { label: entryHeading(latestEntry, t).heading, origin: latestEntry.origin }
+        ? { approximate: hasMore, label: entryHeading(latestEntry, t).heading, origin: latestEntry.origin }
         : null;
   const count = entries.length;
 
@@ -229,6 +242,9 @@ export const RunActivityView = ({
           ) : (
             <>
               <span className="run-activity__latest">{summary.label}</span>
+              {summary.approximate ? (
+                <span className="run-activity__latest-note">{t("runActivity.latestApproximate")}</span>
+              ) : null}
               <span className="run-activity__entry-origin" data-origin={summary.origin}>
                 {t(originKey(summary.origin))}
               </span>
@@ -263,24 +279,27 @@ export const RunActivityView = ({
                 {t("runActivity.omitted", { count: omittedCount })}
               </p>
             ) : null}
-            {error ? (
-              <LocalConnectionRecovery error={error} onRetry={onRetry} retrying={loading} />
-            ) : loading ? (
-              <RunActivitySkeleton />
-            ) : entries.length > 0 ? (
+            {/* A failed "Show more" must not blank a list the owner is already reading -- the
+                recovery affordance renders alongside whatever loaded, never instead of it. Only
+                an initial-load failure (no entries to keep) hides the empty-state copy in favour
+                of the recovery panel. */}
+            {entries.length > 0 ? (
               <ol className="run-activity__entries">
                 {entries.map((entry) => (
                   <RunActivityEntryRow entry={entry} key={entry.id} locale={locale} t={t} />
                 ))}
               </ol>
-            ) : (
+            ) : loading ? (
+              <RunActivitySkeleton />
+            ) : error ? null : (
               <p className="inspector-copy">{t("runActivity.noActivity")}</p>
             )}
+            {error ? <LocalConnectionRecovery error={error} onRetry={onRetry} retrying={loading} /> : null}
             {hasMore ? (
               <Button
                 className="run-activity__more"
-                disabled={loading}
-                loading={loading}
+                disabled={loadingMore}
+                loading={loadingMore}
                 onClick={onLoadMore}
                 size="sm"
               >
@@ -316,8 +335,13 @@ const latestAgentRunId = (sessions: readonly ProviderSession[]): string | null =
  * WorkbenchPage.tsx exactly: `run.currentStageAttemptId` still names the last attempt once the
  * pipeline is done (its status simply stops being RUNNING), so this keeps working for a finished
  * run, not only a live one.
+ *
+ * Renders nothing -- not even the section header -- while there is no AgentRun to show activity
+ * for: a WorkItem that never ran (or has not started its first session yet) carries no diagnostic
+ * value in an empty Run Activity card, the same call `AttemptSessionsPanel` already makes for its
+ * own "no sessions yet" case.
  */
-export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element => {
+export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
   const [expanded, setExpanded] = useState(false);
   const workflowQuery = useWorkItemWorkflow(item.id);
   const run = workflowQuery.data?.run ?? null;
@@ -333,8 +357,12 @@ export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Elem
       ? null
       : (fleetQuery.data?.entries.find((entry) => entry.agentRunId === agentRunId) ?? null);
   const activityQuery = useAgentRunActivity(item.id, agentRunId ?? undefined);
+
+  if (agentRunId === null) return null;
+
   const entries = activityQuery.data?.pages.flatMap((page) => page.entries) ?? [];
   const lastPage = activityQuery.data?.pages.at(-1);
+  const gap = anyPageHasGap(activityQuery.data?.pages ?? []);
 
   return (
     <RunActivityView
@@ -343,9 +371,10 @@ export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Elem
       entries={entries}
       error={activityQuery.error instanceof Error ? activityQuery.error : null}
       expanded={expanded}
-      gap={lastPage?.gap ?? false}
+      gap={gap}
       hasMore={activityQuery.hasNextPage}
-      loading={agentRunId !== null && activityQuery.isPending}
+      loading={activityQuery.isPending}
+      loadingMore={activityQuery.isFetchingNextPage}
       omittedCount={lastPage?.omittedCount ?? 0}
       onLoadMore={() => {
         void activityQuery.fetchNextPage();

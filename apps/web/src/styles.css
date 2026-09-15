@@ -3765,6 +3765,16 @@ body.is-resizing {
   font-weight: var(--lr-weight-normal);
 }
 
+/* Shown only when the collapsed headline is the merged feed's own last *loaded* row rather than
+   Agent Fleet's newest-first fact, and more of the feed exists beyond that page -- so it is not
+   provably the latest action, only the newest one loaded so far. */
+.run-activity__latest-note {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  font-size: var(--lr-font-xs);
+  font-style: italic;
+}
+
 .run-activity__count {
   color: var(--lr-text-faint);
   flex-shrink: 0;

@@ -37,6 +37,7 @@ const renderView = (overrides: Partial<Parameters<typeof RunActivityView>[0]> = 
         gap={false}
         hasMore={false}
         loading={false}
+        loadingMore={false}
         omittedCount={0}
         onLoadMore={vi.fn()}
         onRetry={vi.fn()}
@@ -162,6 +163,48 @@ describe("RunActivityView", () => {
     expect(html).not.toContain("<img src=x onerror=alert(1)>");
   });
 
+  // The test above sets `label: null`, which routes the entry's text into the *heading* sink
+  // (`entryHeading` falls back to `detail` only when `label` is empty) and leaves `detail: null` --
+  // so it never exercises the `run-activity__entry-detail` <p> at all. A non-null `label` keeps
+  // `detail` in play as its own sink, and PROVIDER_REPORTED `status` is a third, separate one
+  // (`entryStatus` returns it raw, unlike a DAEMON_AUDITED row's `workspaceTool.status.*` lookup).
+  // Verified by mutation in this session (see task-9-report.md): swapping either sink's `{value}`
+  // for `dangerouslySetInnerHTML={{ __html: value }}` fails exactly this test and no others.
+  it("renders provider detail and status as text too, not only the heading", () => {
+    const html = renderView({
+      entries: [
+        entry({
+          detail: "<img src=x onerror=alert(2)>",
+          failureCode: null,
+          kind: "TOOL_CALL",
+          label: "pnpm test",
+          origin: "PROVIDER_REPORTED",
+          status: "<script>window.hacked=true</script>",
+        }),
+      ],
+      expanded: true,
+    });
+
+    expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+    expect(html).not.toContain("<img src=x onerror=alert(2)>");
+    expect(html).toContain("&lt;script&gt;window.hacked=true&lt;/script&gt;");
+    expect(html).not.toContain("<script>window.hacked=true</script>");
+  });
+
+  // The collapsed Fleet-hint label (`collapsedActionLabel`) is a fourth sink, structurally
+  // separate from every per-entry one above: it never goes through `RunActivityEntryRow` at all.
+  // Verified by mutation in this session: swapping its `{summary.label}` for
+  // `dangerouslySetInnerHTML` fails only this test.
+  it("renders the collapsed Agent Fleet hint as text too, not as markup", () => {
+    const html = renderView({
+      collapsedAction: { label: "<img src=x onerror=alert(3)>", origin: "PROVIDER_REPORTED" },
+      entries: [],
+    });
+
+    expect(html).toContain("&lt;img src=x onerror=alert(3)&gt;");
+    expect(html).not.toContain("<img src=x onerror=alert(3)>");
+  });
+
   it("falls back to the Agent Fleet hint when no entry has been loaded yet", () => {
     const html = renderView({
       collapsedAction: { label: "pnpm test", origin: "PROVIDER_REPORTED" },
@@ -187,5 +230,85 @@ describe("RunActivityView", () => {
 
     expect(html).toContain("No run activity recorded yet");
     expect(html).not.toContain('run-activity__count"');
+  });
+
+  // Fix round 1, item 4: a finished run has no live Agent Fleet entry, so the headline falls back
+  // to the merged feed's own last *loaded* entry -- the tail of an oldest-first page. For a run
+  // longer than one page that row is simply not the latest action, and presenting it as one would
+  // be false. `hasMore` is exactly the signal that more of the feed exists beyond what was loaded.
+  it("does not claim a loaded-but-unconfirmed entry is the latest action when more of the feed exists", () => {
+    const html = renderView({
+      entries: [entry({ label: "READ_FILE" })],
+      hasMore: true,
+    });
+
+    expect(html).toContain("Read file");
+    expect(html).toContain("more recent activity may exist");
+  });
+
+  it("makes no such qualification once the whole feed has been loaded", () => {
+    const html = renderView({
+      entries: [entry({ label: "READ_FILE" })],
+      hasMore: false,
+    });
+
+    expect(html).not.toContain("more recent activity may exist");
+  });
+
+  it("makes no such qualification when the Agent Fleet hint is the confirmed newest-first source", () => {
+    const html = renderView({
+      collapsedAction: { label: "pnpm test", origin: "PROVIDER_REPORTED" },
+      entries: [],
+      hasMore: true,
+    });
+
+    expect(html).not.toContain("more recent activity may exist");
+  });
+
+  // Fix round 1, item 6: a failed or in-flight "Show more" must be visible on the button itself,
+  // not conflated with the initial-page `loading` flag (which stays false while paging forward).
+  it("shows the Show more button busy while a next page is fetching, not the initial-load flag", () => {
+    const html = renderView({
+      entries: [entry()],
+      expanded: true,
+      hasMore: true,
+      loading: false,
+      loadingMore: true,
+    });
+
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("run-activity__skeleton");
+  });
+
+  // Fix round 1, item 7: a failed "Show more" sets `error` while the already-loaded entries are
+  // still held in `data` -- the recovery affordance must render alongside that list, never blank
+  // it out from under the owner who is already reading it.
+  it("keeps already-loaded entries visible alongside a failed Show more, instead of blanking the list", () => {
+    const html = renderView({
+      entries: [entry({ label: "READ_FILE" })],
+      error: new Error("The local daemon could not be reached"),
+      expanded: true,
+      hasMore: true,
+    });
+
+    expect(html).toContain("Read file");
+    expect(html).toContain("run-activity__entries");
+    expect(html).toContain("The local daemon could not be reached");
+    expect(html).not.toContain("No run activity recorded yet");
+  });
+
+  it("shows only the recovery panel, not a fabricated empty state, when the very first load fails", () => {
+    const html = renderView({
+      entries: [],
+      error: new Error("The local daemon could not be reached"),
+      expanded: true,
+    });
+
+    expect(html).toContain("The local daemon could not be reached");
+    // The collapsed summary's own "nothing known yet" text is unrelated and still correct here;
+    // what must not appear is the *body*'s empty-state paragraph fabricating "no activity" right
+    // next to a recovery panel explaining that the read itself failed.
+    expect(html).not.toContain('class="inspector-copy"');
+    expect(html).not.toContain("run-activity__entries");
   });
 });

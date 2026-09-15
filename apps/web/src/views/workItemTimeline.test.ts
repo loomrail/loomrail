@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DomainEvent } from "@loomrail/contracts";
 
-import { isWorkItemTimelineEvent } from "./workItemTimeline";
+import { isWorkItemTimelineEvent, shouldKeepPagingForLifecycleEvent } from "./workItemTimeline";
 
 // Task 9: WORKSPACE_TOOL_CALL_CHANGED now renders exclusively in Run Activity
 // (components/RunActivitySection.tsx). Showing the same daemon-audited action here too -- in a
@@ -92,5 +92,52 @@ describe("isWorkItemTimelineEvent", () => {
     const page = [workItemCreatedEvent, workspaceToolCallChangedEvent];
 
     expect(page.filter(isWorkItemTimelineEvent)).toEqual([workItemCreatedEvent]);
+  });
+});
+
+// Fix round 1: the newest 30 raw events for a busy WorkItem can legitimately be entirely
+// WORKSPACE_TOOL_CALL_CHANGED (each tool call appends two), which used to leave the filtered page
+// empty -- "No activity yet" rendered right beside the section's own "Show more" button, with real
+// lifecycle history one page back. `TaskActivitySection` (WorkbenchPage.tsx) now auto-pages past
+// exactly that state; this is the boolean rule driving it, tested directly.
+describe("shouldKeepPagingForLifecycleEvent", () => {
+  it("keeps paging when the loaded page filtered down to nothing but more raw pages exist", () => {
+    expect(
+      shouldKeepPagingForLifecycleEvent({
+        hasLoadedFirstPage: true,
+        hasNextPage: true,
+        lifecycleEventsLoaded: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("stops once a lifecycle event has been found", () => {
+    expect(
+      shouldKeepPagingForLifecycleEvent({
+        hasLoadedFirstPage: true,
+        hasNextPage: true,
+        lifecycleEventsLoaded: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("stops once the feed is exhausted, even with nothing filtered in yet", () => {
+    expect(
+      shouldKeepPagingForLifecycleEvent({
+        hasLoadedFirstPage: true,
+        hasNextPage: false,
+        lifecycleEventsLoaded: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("never fires before the first page has loaded -- zero loaded is not yet a filtered-empty page", () => {
+    expect(
+      shouldKeepPagingForLifecycleEvent({
+        hasLoadedFirstPage: false,
+        hasNextPage: true,
+        lifecycleEventsLoaded: 0,
+      }),
+    ).toBe(false);
   });
 });
