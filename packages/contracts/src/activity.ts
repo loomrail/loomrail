@@ -8,6 +8,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { workflowStageSchema } from "./workflow.js";
 import { workspaceToolFailureCodeSchema } from "./workspace-tool.js";
 
 /**
@@ -87,6 +88,11 @@ export const agentRunActivityEntrySchema = z
     // DAEMON_AUDITED entry that did not fail.
     failureCode: workspaceToolFailureCodeSchema.nullable(),
     truncated: z.boolean(),
+    // Which run produced this entry. The feed spans a WorkItem's runs, so the reader groups by
+    // this and names the group with `stage`; without it a reader cannot tell one run's actions
+    // from the next run's, and the two can be minutes apart or days.
+    agentRunId: z.string().min(1),
+    stage: workflowStageSchema,
   })
   .strict();
 

@@ -352,6 +352,7 @@ import {
   type OrphanWorkspaceEvent,
   type StateQuery,
   type StateQueryResult,
+  type WorkItemActivityRow,
 } from "./types.js";
 
 export * from "./types.js";
@@ -496,6 +497,37 @@ const agentRunActivityRowFromRow = (value: unknown): AgentRunActivityRow => {
     truncated: row.truncated === 1,
   };
 };
+
+// Task 1's work-item-scoped sibling of `agentRunActivityEntryRowSchema` above: the same row shape,
+// plus `agent_run_id` so a reader spanning many runs can tell them apart.
+const workItemActivityEntryRowSchema = agentRunActivityEntryRowSchema.extend({
+  agent_run_id: z.string(),
+});
+
+const workItemActivityRowFromRow = (value: unknown): WorkItemActivityRow => {
+  const row = workItemActivityEntryRowSchema.parse(value);
+  return {
+    id: row.id,
+    seq: row.seq,
+    agentRunId: row.agent_run_id,
+    observedAt: row.observed_at,
+    provider: row.provider,
+    kind: row.kind,
+    label: row.label,
+    detail: row.detail,
+    status: row.status,
+    truncated: row.truncated === 1,
+  };
+};
+
+// Task 1's aggregation for LIST_WORK_ITEM_ACTIVITY: one row, summed/OR'd in SQL across every one of
+// the WorkItem's runs that ever wrote a counters row. `COALESCE(..., 0)` covers the WorkItem-has-no-
+// activity-yet case -- SQLite's `SUM`/`MAX` over zero grouped rows is NULL, not 0, and a WorkItem
+// with no recorder writes yet must read as "not omitted, not degraded" rather than fail to parse.
+const workItemActivityStateRowSchema = z.object({
+  omitted_count: z.number().int(),
+  degraded: z.number().int(),
+});
 
 // Task 10's newest-across-both-sources read. `origin_rank` is the raw `0`/`1` the query's own
 // `ORDER BY ... origin_rank DESC` used to break same-timestamp ties -- see the SQL's comment on
@@ -1559,6 +1591,9 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"), agentRunId: opaqueIdSchema })
     .strict(),
+  z
+    .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"), workItemId: opaqueIdSchema })
+    .strict(),
   z.object({ type: z.literal("LIST_STARTED_WORKSPACE_TOOL_CALLS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS") }).strict(),
@@ -1585,6 +1620,14 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       agentRunId: opaqueIdSchema,
       // 2_000, not the table's own 1_000-row bound: a caller reading the buffer at its cap must
       // still be able to ask for "everything held" without the query schema refusing the number.
+      limit: z.number().int().min(1).max(2_000).default(200),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_WORK_ITEM_ACTIVITY"),
+      workItemId: opaqueIdSchema,
+      // Same bound and same reasoning as LIST_AGENT_RUN_ACTIVITY's own `limit` above.
       limit: z.number().int().min(1).max(2_000).default(200),
     })
     .strict(),
@@ -3807,6 +3850,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectWorkspaceToolCallsForAgentRun = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE agent_run_id = ? ORDER BY started_at, id",
     );
+    // Task 1's work-item-scoped sibling: the feed's unit moves from AgentRun to WorkItem, so the
+    // audited half now needs every one of the WorkItem's runs, not one. `workspace_tool_calls`
+    // already carries `work_item_id` as its own column (migration 0055) -- filtered on directly,
+    // no join through `agent_runs`.
+    const selectWorkspaceToolCallsForWorkItem = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE work_item_id = ? ORDER BY started_at, id",
+    );
     const selectWorkspaceToolCallsForStageAttempt = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE stage_attempt_id = ? ORDER BY started_at, id",
     );
@@ -4249,6 +4299,35 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectAgentRunActivityState = database.prepare(
       "SELECT next_seq, omitted_count, degraded FROM agent_run_activity_state WHERE agent_run_id = ?",
+    );
+    // Task 1's work-item-scoped sibling of `selectAgentRunActivityEntries` above: same table, same
+    // `(observed_at, id)` order, filtered by `work_item_id` -- which `agent_run_activity` already
+    // carries (migration 0062) -- instead of `agent_run_id`, and carrying `agent_run_id` itself in
+    // the projection so the reader can tell which run each row came from.
+    const selectAgentRunActivityEntriesForWorkItem = database.prepare(
+      `SELECT id, seq, agent_run_id, provider, kind, label, detail, status, truncated, observed_at
+       FROM agent_run_activity
+       WHERE work_item_id = ?
+       ORDER BY observed_at, id
+       LIMIT ?`,
+    );
+    // The aggregation this task's brief asked for a documented decision on: one query, not one per
+    // run. `agent_run_activity_state` has no `work_item_id` of its own (it is keyed by
+    // `agent_run_id`, one row per run), so reaching "every counters row for this WorkItem's runs"
+    // needs a join to `agent_runs` -- which does carry `work_item_id` -- unlike the two entry reads
+    // above, which never join because their own tables already carry it. That join is bounded by
+    // however many AgentRuns the WorkItem has, which is small and already the join
+    // `selectExpiredAgentRunActivityEntries` above performs per row; aggregating here with SQL's own
+    // `SUM`/`MAX` over that join, in one round trip, is cheaper than reading N state rows back into
+    // TypeScript to reduce them, and correctness does not depend on N: a WorkItem with many runs
+    // still costs exactly one query, never one per run.
+    const selectAgentRunActivityStateForWorkItem = database.prepare(
+      `SELECT
+         COALESCE(SUM(agent_run_activity_state.omitted_count), 0) AS omitted_count,
+         COALESCE(MAX(agent_run_activity_state.degraded), 0) AS degraded
+       FROM agent_run_activity_state
+       INNER JOIN agent_runs ON agent_runs.id = agent_run_activity_state.agent_run_id
+       WHERE agent_runs.work_item_id = ?`,
     );
     // Task 10: the newest Run Activity entry per AgentRun, across BOTH `workspace_tool_calls` and
     // `agent_run_activity`, for however many AgentRuns the Fleet is currently rendering -- one
@@ -14593,6 +14672,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               .all(queryValue.agentRunId)
               .map(workspaceToolCallFromRow),
           };
+        case "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM":
+          return {
+            type: "WORKSPACE_TOOL_CALLS",
+            calls: selectWorkspaceToolCallsForWorkItem
+              .all(queryValue.workItemId)
+              .map(workspaceToolCallFromRow),
+          };
         case "LIST_STARTED_WORKSPACE_TOOL_CALLS":
           return {
             type: "WORKSPACE_TOOL_CALLS",
@@ -14837,6 +14923,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             entries,
             omittedCount: state === null ? 0 : state.omitted_count,
             degraded: state === null ? false : state.degraded === 1,
+          };
+        }
+        case "LIST_WORK_ITEM_ACTIVITY": {
+          const entries = selectAgentRunActivityEntriesForWorkItem
+            .all(queryValue.workItemId, queryValue.limit)
+            .map(workItemActivityRowFromRow);
+          // Unlike LIST_AGENT_RUN_ACTIVITY's per-run counters read above, this is an aggregate query
+          // with no GROUP BY, so it always returns exactly one row -- COALESCE inside the SQL is what
+          // turns "no run of this WorkItem ever wrote a counters row" into 0/false rather than NULL,
+          // so there is no `undefined` case to branch on here the way the per-run read has to.
+          const state = workItemActivityStateRowSchema.parse(
+            selectAgentRunActivityStateForWorkItem.get(queryValue.workItemId),
+          );
+          return {
+            type: "WORK_ITEM_ACTIVITY",
+            entries,
+            omittedCount: state.omitted_count,
+            degraded: state.degraded === 1,
           };
         }
         case "LIST_LATEST_AGENT_RUN_ACTIVITY":

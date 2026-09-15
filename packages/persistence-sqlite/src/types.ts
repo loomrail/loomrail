@@ -178,6 +178,31 @@ export type AgentRunActivityRow = {
 };
 
 /**
+ * One row of the prunable `agent_run_activity` buffer, work-item-scoped (Task 1): the feed's unit
+ * moves from AgentRun to WorkItem, so unlike `AgentRunActivityRow` above -- which reads one run and
+ * therefore never needs to say which run a row came from -- this must carry `agentRunId` on every
+ * row, so the reader can group entries by run and name each group with that run's stage.
+ *
+ * `stage` itself is NOT read here, on purpose: `agent_run_activity` carries no such column, and
+ * resolving it would mean joining through `agent_runs` -> `stage_attempts` for every row -- exactly
+ * the join this task's own boundary forbids (both source tables already carry `work_item_id`, so
+ * filtering by WorkItem needs none). A later task, which already loads the WorkItem's AgentRuns to
+ * build the merged feed, resolves `stage` there instead of duplicating that lookup per row here.
+ */
+export type WorkItemActivityRow = {
+  id: string;
+  seq: number;
+  agentRunId: string;
+  observedAt: string;
+  provider: LiveProviderId;
+  kind: ProviderActivityEntry["kind"];
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+  truncated: boolean;
+};
+
+/**
  * The newest Run Activity entry for one AgentRun, resolved across BOTH sources -- daemon-audited
  * `workspace_tool_calls` and provider-reported `agent_run_activity` -- by the same rule the merged
  * feed itself orders by (Task 8's `mergeRunActivity`: time first, then origin, then id), so this and
@@ -252,6 +277,11 @@ export type StateQuery =
   // `workspace_tool_calls` already carries -- not by resolving a ProviderSession first, which would
   // assume one session per AgentRun instead of just asking the table for what it already knows.
   | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"; agentRunId: string }
+  // Task 1's work-item-scoped sibling: the WorkItem-spanning Run Activity feed groups entries by
+  // run, so it needs every run's audited calls, not one run's. `workspace_tool_calls` already
+  // carries `work_item_id` as its own column (migration 0055), so this filters on it directly --
+  // no join through `agent_runs` to reach it.
+  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"; workItemId: string }
   | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
@@ -276,6 +306,21 @@ export type StateQuery =
       // ever sees one table.
       type: "LIST_AGENT_RUN_ACTIVITY";
       agentRunId: string;
+      limit?: number;
+    }
+  | {
+      // Task 1's work-item-scoped sibling of LIST_AGENT_RUN_ACTIVITY above: the feed's unit moves
+      // from AgentRun to WorkItem (spec 128), so this reads every one of the WorkItem's runs'
+      // `agent_run_activity` rows in one query -- `agent_run_activity` already carries `work_item_id`
+      // as its own column (migration 0062), so this filters on it directly, no join. `omittedCount`
+      // and `degraded` are aggregated across the WorkItem's runs (summed, and true if any run
+      // degraded) rather than read per-run, since a WorkItem-spanning feed has no single run to read
+      // them from.
+      type: "LIST_WORK_ITEM_ACTIVITY";
+      workItemId: string;
+      // Same 2_000 bound as LIST_AGENT_RUN_ACTIVITY's own `limit`, for the same reason: comfortably
+      // above one run's 1_000-row eviction cap, so a caller reading a single-run WorkItem at the cap
+      // is never refused for lack of headroom.
       limit?: number;
     }
   | {
@@ -450,6 +495,15 @@ export type StateQueryResult =
   | {
       type: "AGENT_RUN_ACTIVITY";
       entries: AgentRunActivityRow[];
+      omittedCount: number;
+      degraded: boolean;
+    }
+  | {
+      // Task 1's work-item-scoped sibling of AGENT_RUN_ACTIVITY above (LIST_WORK_ITEM_ACTIVITY's
+      // result). `omittedCount`/`degraded` are already aggregated across the WorkItem's runs when
+      // this arrives -- summed and OR'd in SQL, not left for the caller to reduce.
+      type: "WORK_ITEM_ACTIVITY";
+      entries: WorkItemActivityRow[];
       omittedCount: number;
       degraded: boolean;
     }
