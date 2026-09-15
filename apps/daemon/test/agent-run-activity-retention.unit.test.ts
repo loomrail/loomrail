@@ -55,7 +55,15 @@ describe("daemon agent run activity retention", () => {
     await app.close();
   });
 
-  it("does not call execute at all once the LIST query finds nothing left to sweep", async () => {
+  // fix-round-1, finding 2: DELETE_EXPIRED_AGENT_RUN_ACTIVITY also prunes an `agent_run_activity_state`
+  // row for a closed, expired run that never recorded any entries (MARK_AGENT_RUN_ACTIVITY_DEGRADED
+  // can create one with zero entries) -- exactly the run this LIST query never surfaces, since it
+  // only ever lists `agent_run_activity` rows. Gating the delete on a nonempty LIST page meant a
+  // shipped daemon would never actually call it whenever no other entries happened to be expired at
+  // the same time, leaving that orphan forever. This proves the delete still runs, and still reports
+  // the state row it found, on an entries page that came back empty.
+  it("still issues a delete when the entries page is empty, so an orphaned state row is not skipped", async () => {
+    let executeCalls = 0;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
       query: (query: StateQuery): StateQueryResult => {
@@ -64,8 +72,59 @@ describe("daemon agent run activity retention", () => {
         }
         return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] };
       },
-      execute: () => {
-        throw new Error("Nothing was selected -- the sweep must not write an empty-effect command");
+      execute: (command) => {
+        if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
+          throw new Error(`Unexpected command ${command.type}`);
+        }
+        executeCalls += 1;
+        return {
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
+          replayed: false,
+          entriesDeleted: 0,
+          stateRowsDeleted: 1,
+        };
+      },
+      close: () => undefined,
+    };
+    const app = Fastify({ logger: false });
+
+    expect(cleanupExpiredAgentRunActivity({ state, now, logger: app.log })).toEqual({
+      selected: 0,
+      entriesDeleted: 0,
+      stateRowsDeleted: 1,
+    });
+    // Both sides came back short of a full page (0 entries, 1 of a possible 1,000 state rows), so
+    // this stops after the one call that found the orphan rather than re-scanning for more.
+    expect(executeCalls).toBe(1);
+    await app.close();
+  });
+
+  // fix-round-1, finding 4: a batch that removes nothing on either side cannot make progress on a
+  // later one either -- this is the ordinary steady state (a healthy database with nothing expired
+  // at all) and must cost exactly one call, not up to twenty scans that all come back empty.
+  it("stops after one call when a batch makes no progress on either side", async () => {
+    let executeCalls = 0;
+    const state: LocalState = {
+      startup: { appliedMigrations: [] },
+      query: (query: StateQuery): StateQueryResult => {
+        if (query.type !== "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES") {
+          throw new Error(`Unexpected query ${query.type}`);
+        }
+        return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] };
+      },
+      execute: (command) => {
+        if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
+          throw new Error(`Unexpected command ${command.type}`);
+        }
+        executeCalls += 1;
+        return {
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
+          replayed: false,
+          entriesDeleted: 0,
+          stateRowsDeleted: 0,
+        };
       },
       close: () => undefined,
     };
@@ -76,6 +135,7 @@ describe("daemon agent run activity retention", () => {
       entriesDeleted: 0,
       stateRowsDeleted: 0,
     });
+    expect(executeCalls).toBe(1);
     await app.close();
   });
 
@@ -117,25 +177,33 @@ describe("daemon agent run activity retention", () => {
     const app = Fastify({ logger: false });
 
     const summary = cleanupExpiredAgentRunActivity({ state, now, logger: app.log });
-    // The batch cap (20) and the per-batch size (1,000) are apps/daemon's own internal constants,
-    // not part of the public contract -- this asserts the OBSERVABLE consequence (a small, fixed
-    // number of execute calls despite an inexhaustible backlog), not the constants themselves, so
-    // the test does not need to import or duplicate them to stay meaningful.
-    expect(calls).toBeGreaterThan(0);
-    expect(calls).toBeLessThanOrEqual(20);
+    // fix-round-1, finding 3: an exact count, not just "some small bound" -- `toBeLessThanOrEqual`
+    // alone passed unchanged when the reviewer shrank the batch-cap constant to 1, since 1 is also
+    // "<= 20". Pinning the exact value (20, the constant's own current value) is what a twentyfold
+    // shrink of the startup budget actually fails.
+    expect(calls).toBe(20);
     expect(observedLimit).toBeGreaterThan(0);
     expect(summary.entriesDeleted).toBe(calls * observedLimit);
     expect(summary.selected).toBe(summary.entriesDeleted);
     await app.close();
   });
 
-  it("does not log a completion summary when nothing was selected", async () => {
+  it("does not log a completion summary when a call makes no progress", async () => {
     const infoMessages: unknown[] = [];
     const state: LocalState = {
       startup: { appliedMigrations: [] },
       query: (): StateQueryResult => ({ type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] }),
-      execute: () => {
-        throw new Error("Nothing to sweep -- execute must not be called");
+      execute: (command) => {
+        if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
+          throw new Error(`Unexpected command ${command.type}`);
+        }
+        return {
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
+          replayed: false,
+          entriesDeleted: 0,
+          stateRowsDeleted: 0,
+        };
       },
       close: () => undefined,
     };

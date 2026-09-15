@@ -4385,6 +4385,7 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
              SELECT 1 FROM agent_run_activity
              WHERE agent_run_activity.agent_run_id = agent_run_activity_state.agent_run_id
            )
+         ORDER BY agent_run_activity_state.agent_run_id
          LIMIT ?
        )`,
     );

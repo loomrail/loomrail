@@ -30,8 +30,10 @@ type ActivityFixture = {
   agentRunId: string;
   providerSessionId: string;
   provider: "CODEX" | "CLAUDE_CODE";
+  workItemId: string;
   pipelineRunId: string;
   pipelineVersion: number;
+  dispatchId: string;
 };
 
 describe("agent run activity retention", () => {
@@ -169,8 +171,10 @@ describe("agent run activity retention", () => {
       agentRunId: agent.run.id,
       providerSessionId: session.session.id,
       provider: "CODEX",
+      workItemId: created.workItem.id,
       pipelineRunId: pipeline.run.id,
       pipelineVersion: pipeline.run.version,
+      dispatchId: pipeline.dispatch.id,
     };
   };
 
@@ -229,6 +233,38 @@ describe("agent run activity retention", () => {
     return closureEvent.occurredAt;
   };
 
+  // Drives the fixture's single-IMPLEMENT-stage pipeline to completion WITHOUT ending it in
+  // ACCEPTANCE, the exact gap fix-round-1 flagged: `decideApplyProviderOutcome`
+  // (packages/domain/src/workflow.ts) returns `workItem: context.workItem` unchanged when a
+  // template's last stage succeeds -- only the terminal `PIPELINE_COMPLETED` event moves, not the
+  // WorkItem's own `state` column. `workflowTemplateSchema` never requires a template to end with
+  // ACCEPTANCE, and `activityTemplate` above is exactly such a template, so this is a reachable
+  // shape in production, not a fixture artifact. START_AGENT_RUN already performs the
+  // MARK_WORKFLOW_DISPATCH_STARTED transition internally (see its handler in
+  // packages/persistence-sqlite/src/index.ts), so this goes straight to APPLY_PROVIDER_OUTCOME.
+  // `sessionCompletion` is omitted, same as the mock-pipeline precedent in
+  // local-state.integration.test.ts, so IMPLEMENT's "observed a real mutation" check never applies.
+  const completeStageWithoutClosingWorkItem = (localState: LocalState, fixture: ActivityFixture): string => {
+    const result = localState.execute({
+      schemaVersion: 1,
+      commandId: freshCommandId("apply-provider-outcome"),
+      correlationId: "correlation-apply-provider-outcome",
+      actor: { type: "SYSTEM", id: "mock-provider" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId: fixture.dispatchId,
+        provider: fixture.provider,
+        template: activityTemplate,
+        outcome: { type: "COMPLETED", summary: "Implementation completed." },
+        resultTree: "c".repeat(40),
+      },
+    });
+    if (result.type !== "PROVIDER_OUTCOME_APPLIED") throw new Error("Expected the provider outcome to apply");
+    const closureEvent = result.events.find((event) => event.type === "PIPELINE_COMPLETED");
+    if (!closureEvent) throw new Error("Expected a PIPELINE_COMPLETED event");
+    return closureEvent.occurredAt;
+  };
+
   const listExpired = (localState: LocalState, closedBefore: string, limit?: number): string[] => {
     const result = localState.query({
       type: "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES",
@@ -280,6 +316,30 @@ describe("agent run activity retention", () => {
     expect(listExpired(localState, farFuture)).toEqual([]);
     expect(sweep(localState, farFuture)).toEqual({ entriesDeleted: 0, stateRowsDeleted: 0 });
     expect(readState(localState, fixture.agentRunId)).toMatchObject({ entries: 2 });
+  });
+
+  // fix-round-1, finding 1: the Case-1 mutation defeated the closure-Event join AND the
+  // `work_items.state IN ('DONE','CANCELLED')` clause together, so it proved only the pair, not
+  // this clause on its own. A WorkItem carrying an old closure-class Event while its own `state`
+  // never moved past IN_PROGRESS is reachable (see `completeStageWithoutClosingWorkItem` above),
+  // and this is the only test that isolates the `work_items.state` guard against it.
+  it("does not select or delete activity for a completed-but-unaccepted, still-open work item, however old", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    recordActivity(localState, fixture, "c1");
+    const completedAt = completeStageWithoutClosingWorkItem(localState, fixture);
+
+    const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: fixture.workItemId });
+    if (workItem.type !== "WORK_ITEM" || workItem.workItem === null) throw new Error("Expected the WorkItem");
+    // The gap this test exists to close: PIPELINE_COMPLETED fired on the WorkItem's own aggregate,
+    // but the WorkItem's `state` never left IN_PROGRESS -- there is no ACCEPTANCE stage in
+    // `activityTemplate` to move it to DONE.
+    expect(workItem.workItem.state).toBe("IN_PROGRESS");
+
+    const afterCompletion = new Date(new Date(completedAt).getTime() + 1).toISOString();
+    expect(listExpired(localState, afterCompletion)).toEqual([]);
+    expect(sweep(localState, afterCompletion)).toEqual({ entriesDeleted: 0, stateRowsDeleted: 0 });
+    expect(readState(localState, fixture.agentRunId)).toMatchObject({ entries: 1 });
   });
 
   it("does not select activity for a work item closed within the retention window", async () => {

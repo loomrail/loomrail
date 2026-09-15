@@ -36,6 +36,15 @@ export type AgentRunActivityRetentionSummary = {
  * Synchronous, unlike those two: `LocalState.query`/`.execute` are synchronous (the SQLite driver
  * they close over has no async API), and this sweep does no I/O of its own -- no file to delete, no
  * process to wait on -- so there is nothing here an `async` signature would actually be awaiting.
+ *
+ * `DELETE_EXPIRED_AGENT_RUN_ACTIVITY` runs every batch regardless of whether the entries LIST found
+ * anything, and its own two counts -- not the LIST page -- decide whether to keep batching
+ * (fix-round-1, finding 2). A run whose recorder never wrote an entry can still carry an orphaned,
+ * closed-and-expired `agent_run_activity_state` row with nothing in `agent_run_activity` beside it
+ * to put it on the entries LIST; gating the delete on that LIST finding candidates meant this sweep
+ * shipped a command that could prune such an orphan but a daemon that would never actually call it
+ * whenever no other entries happened to be expired at the same time -- the same unbounded-in-runs
+ * leak this task exists to close, just moved one table over.
  */
 export const cleanupExpiredAgentRunActivity = (input: {
   state: LocalState;
@@ -51,8 +60,10 @@ export const cleanupExpiredAgentRunActivity = (input: {
       closedBefore,
       limit: RETENTION_BATCH_SIZE,
     });
-    if (candidates.type !== "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES" || candidates.entryIds.length === 0) {
-      break;
+    if (candidates.type !== "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES") {
+      throw new Error(
+        `Unexpected result type ${candidates.type} for LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES`,
+      );
     }
     summary.selected += candidates.entryIds.length;
     // A fresh, random commandId every call -- deliberately not derived from `closedBefore`/`limit`
@@ -76,7 +87,15 @@ export const cleanupExpiredAgentRunActivity = (input: {
     }
     summary.entriesDeleted += result.entriesDeleted;
     summary.stateRowsDeleted += result.stateRowsDeleted;
-    if (candidates.entryIds.length < RETENTION_BATCH_SIZE) break;
+    // Fix-round-1, finding 4: neither side of this batch removed anything, so neither side of the
+    // next one would either -- stop instead of paying for up to 19 more full scans that cannot make
+    // progress (e.g. the ordinary case of a clean database with nothing expired at all).
+    if (result.entriesDeleted === 0 && result.stateRowsDeleted === 0) break;
+    // Both sides came back short of a full page: nothing is waiting behind this batch on either
+    // side, so another call could only repeat this one's own (now empty) result.
+    if (result.entriesDeleted < RETENTION_BATCH_SIZE && result.stateRowsDeleted < RETENTION_BATCH_SIZE) {
+      break;
+    }
   }
 
   if (summary.entriesDeleted > 0 || summary.stateRowsDeleted > 0) {
