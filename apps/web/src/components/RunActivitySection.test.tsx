@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunActivityEntry, WorkItem } from "@loomrail/contracts";
+import type { AgentRunActivityEntry, AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
 
 import { I18nProvider } from "../i18n";
 import { RunActivitySection, RunActivityView } from "./RunActivitySection";
@@ -16,16 +16,27 @@ import { RunActivitySection, RunActivityView } from "./RunActivitySection";
 // `renderToStaticMarkup` can render the real container, not just the pure view. This is what fix
 // round 2 uses to cover the "never started" gate directly, after round 1 left it verified only by
 // a live e2e run and reported the gap.
+//
+// Fix round 1 on Task 5: the mocked query's pages are mutable, so a container test can hand the real
+// component a multi-page feed instead of only the "nothing loaded yet" shape. `vi.hoisted` is what
+// makes that possible and is the repository's own idiom for it (packages/workspace/test/
+// repository.unit.test.ts, packages/provider-core/test/process-runner-ordering.unit.test.ts): a
+// `vi.mock` factory is hoisted above ordinary module scope and cannot close over a plain `let`.
+// `undefined` stays the default -- the exact shape the two gate tests below already relied on.
+const mockedActivity = vi.hoisted(() => ({
+  pages: undefined as readonly AgentRunActivityPage[] | undefined,
+}));
+
 vi.mock("../workspace", () => ({
   useAgentFleet: () => ({ data: { entries: [] } }),
   useWorkItemActivity: () => ({
-    data: undefined,
+    data: mockedActivity.pages === undefined ? undefined : { pages: mockedActivity.pages },
     error: null,
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isError: false,
     isFetchingNextPage: false,
-    isPending: true,
+    isPending: mockedActivity.pages === undefined,
     refetch: vi.fn(),
   }),
 }));
@@ -48,8 +59,17 @@ const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivity
   ...overrides,
 });
 
+const activityPage = (overrides: Partial<AgentRunActivityPage> = {}): AgentRunActivityPage => ({
+  entries: [],
+  nextCursor: null,
+  omittedCount: 0,
+  degraded: false,
+  gap: false,
+  ...overrides,
+});
+
 // Matches boardView.test.ts's own `workItem` fixture shape. Only `currentStage` varies between the
-// two RunActivitySection container tests below -- everything else is filler a real WorkItem needs
+// two RunActivitySection gate tests below -- everything else is filler a real WorkItem needs
 // to satisfy the type, not a fact either test depends on.
 const workItem = (overrides: Partial<WorkItem> & Pick<WorkItem, "id">): WorkItem => ({
   schemaVersion: 1,
@@ -468,7 +488,15 @@ describe("RunActivitySection", () => {
   beforeEach(() => {
     window.localStorage.clear();
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-US" });
+    mockedActivity.pages = undefined;
   });
+
+  const renderSection = (): string =>
+    renderToStaticMarkup(
+      <I18nProvider>
+        <RunActivitySection item={workItem({ id: "item-1", currentStage: "IMPLEMENT" })} />
+      </I18nProvider>,
+    );
 
   it("renders nothing for a WorkItem that has never started its workflow", () => {
     const html = renderToStaticMarkup(
@@ -484,12 +512,32 @@ describe("RunActivitySection", () => {
   });
 
   it("renders the section once the WorkItem has started its workflow, mocked hooks or not", () => {
-    const html = renderToStaticMarkup(
-      <I18nProvider>
-        <RunActivitySection item={workItem({ id: "item-1", currentStage: "IMPLEMENT" })} />
-      </I18nProvider>,
-    );
+    expect(renderSection()).toContain("Run Activity");
+  });
 
-    expect(html).toContain("Run Activity");
+  // Fix round 1 on Task 5: `degraded` is a warning, and a warning must not un-announce itself. The
+  // container read it off the last loaded page alone, so a feed flagged on page two lost its badge
+  // the moment page three came back clean -- the identical defect `anyPageHasGap` already fixed for
+  // the sibling flag. The badge lives in the collapsed <summary>, so this is visible without
+  // expanding anything.
+  it("keeps the degraded warning after a later page comes back clean", () => {
+    mockedActivity.pages = [
+      activityPage({ entries: [entry({ id: "a1" })] }),
+      activityPage({ degraded: true, entries: [entry({ id: "a2" })] }),
+      activityPage({ entries: [entry({ id: "a3" })] }),
+    ];
+
+    expect(renderSection()).toContain("Incomplete");
+  });
+
+  // The other half of the pair: without it, a container that hard-coded the badge would pass the
+  // test above.
+  it("shows no degraded warning when no loaded page reported one", () => {
+    mockedActivity.pages = [
+      activityPage({ entries: [entry({ id: "a1" })] }),
+      activityPage({ entries: [entry({ id: "a2" })] }),
+    ];
+
+    expect(renderSection()).not.toContain("Incomplete");
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
 
-import { anyPageHasGap, hasStartedWorkflow } from "./runActivityPaging";
+import { anyPageHasGap, anyPageIsDegraded, hasStartedWorkflow } from "./runActivityPaging";
 
 // Fix round 1: `gap` is per-page -- set on the page that ran into one of its two causes (a cursor
 // naming a position no longer held, or a source returning its whole read-ahead onto a page that
@@ -34,6 +34,26 @@ describe("anyPageHasGap", () => {
     // Page 3: fetched afterwards, itself not a gap -- but the announcement must not disappear
     // because of it.
     expect(anyPageHasGap([page({ gap: false }), page({ gap: true }), page({ gap: false })])).toBe(true);
+  });
+});
+
+// Fix round 1 on Task 5: `degraded` needs the same rule for the same reason. It is mostly a
+// task-level fact, which is why the container read it off the last loaded page alone, but the route
+// ORs two per-page facts into it (a run whose stage would not resolve; audited rows for a run with no
+// live provider), so the last page alone can un-announce a warning an earlier page raised.
+describe("anyPageIsDegraded", () => {
+  it("is false with no pages loaded", () => {
+    expect(anyPageIsDegraded([])).toBe(false);
+  });
+
+  it("is false when no loaded page reported degradation", () => {
+    expect(anyPageIsDegraded([page(), page(), page()])).toBe(false);
+  });
+
+  it("stays true once any loaded page reported degradation, even pages fetched after it", () => {
+    expect(
+      anyPageIsDegraded([page({ degraded: false }), page({ degraded: true }), page({ degraded: false })]),
+    ).toBe(true);
   });
 });
 

@@ -11,7 +11,7 @@ import type {
 import { Badge, Button, Icon, InspectorSection, Skeleton } from "@loomrail/ui";
 
 import { LocalConnectionRecovery } from "./LocalConnectionRecovery";
-import { anyPageHasGap, hasStartedWorkflow } from "./runActivityPaging";
+import { anyPageHasGap, anyPageIsDegraded, hasStartedWorkflow } from "./runActivityPaging";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import { useAgentFleet, useWorkItemActivity } from "../workspace";
 
@@ -442,14 +442,18 @@ export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Elem
   const activityQuery = useWorkItemActivity(item.id);
   const entries = activityQuery.data?.pages.flatMap((page) => page.entries) ?? [];
   const lastPage = activityQuery.data?.pages.at(-1);
-  const gap = anyPageHasGap(activityQuery.data?.pages ?? []);
+  const pages = activityQuery.data?.pages ?? [];
+  const gap = anyPageHasGap(pages);
+  // Across every loaded page, not just the last one -- `degraded` is a warning and carries one
+  // per-page component, so the last page alone could un-announce it (runActivityPaging.ts).
+  const degraded = anyPageIsDegraded(pages);
 
   if (!hasStartedWorkflow(item)) return null;
 
   return (
     <RunActivityView
       collapsedAction={fleetEntry === null ? null : fleetEntry.latestAction}
-      degraded={lastPage?.degraded ?? false}
+      degraded={degraded}
       entries={entries}
       error={activityQuery.error instanceof Error ? activityQuery.error : null}
       expanded={expanded}
