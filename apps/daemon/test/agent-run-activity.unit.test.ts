@@ -9,8 +9,10 @@ import {
   encodeCursor,
   mergeRunActivity,
   resolveAuditedCallsForRead,
+  resolveReferencedRuns,
   MAX_ACTIVITY_PAGE_SIZE,
   type RunActivityContext,
+  type RunLookup,
 } from "../src/agent-run-activity.js";
 
 // Minimal fixtures shaped like the two upstream rows this module never queries the database for
@@ -481,6 +483,53 @@ describe("buildAgentRunActivityPage", () => {
       ["w3", "agent-run-2", 1],
     ]);
   });
+
+  it("flags gap when a source hits its own read-ahead cap and the page still claims there is nothing more", () => {
+    // Fix round 2: a source that returns exactly `pageSize + 1` rows (the caller's own read-ahead
+    // bound) might hold more beyond what it fetched. Three reported rows share one timestamp here,
+    // matching `pageSize + 1` (2 + 1); the cursor names the middle one, so the page's own slice
+    // lands exactly at the end of what was fetched -- the same shape a run of same-timestamp ties
+    // outlasting the caller's `>= cursor.at` fetch window produces in production (see this
+    // function's own doc comment). `nextCursor: null` here would silently claim completeness.
+    const tiedAt = "2026-09-14T10:00:00.000Z";
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [],
+      runs: [runContext()],
+      reportedRows: [
+        reportedRow({ id: "r1", observedAt: tiedAt }),
+        reportedRow({ id: "r2", observedAt: tiedAt }),
+        reportedRow({ id: "r3", observedAt: tiedAt }),
+      ],
+      omittedCount: 0,
+      degraded: false,
+      cursor: { at: tiedAt, origin: "PROVIDER_REPORTED", id: "r2" },
+      pageSize: 2,
+    });
+    expect(page.gap).toBe(true);
+    expect(page.entries.map((entry) => entry.id)).toEqual(["r3"]);
+  });
+
+  it("does not flag gap when a source's own row count falls short of its read-ahead cap", () => {
+    // Same shape as the test above, one row short of the cap (2, not pageSize + 1 = 3): the
+    // source's own fetch could not have been truncated, so there is nothing to doubt about
+    // `nextCursor: null` here -- this is what keeps the new guard from firing on an ordinary,
+    // genuinely-complete last page.
+    const tiedAt = "2026-09-14T10:00:00.000Z";
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [],
+      runs: [runContext()],
+      reportedRows: [
+        reportedRow({ id: "r1", observedAt: tiedAt }),
+        reportedRow({ id: "r2", observedAt: tiedAt }),
+      ],
+      omittedCount: 0,
+      degraded: false,
+      cursor: { at: tiedAt, origin: "PROVIDER_REPORTED", id: "r1" },
+      pageSize: 2,
+    });
+    expect(page.gap).toBe(false);
+    expect(page.entries.map((entry) => entry.id)).toEqual(["r2"]);
+  });
 });
 
 describe("resolveAuditedCallsForRead", () => {
@@ -536,5 +585,97 @@ describe("resolveAuditedCallsForRead", () => {
       ],
     );
     expect(resolved).toEqual({ auditedCalls: [healthy], degraded: true });
+  });
+});
+
+describe("resolveReferencedRuns", () => {
+  // A run whose lookup succeeds twice (AgentRun found, then its StageAttempt found too).
+  const workingLookup = (
+    overrides: Partial<{ provider: string; stageAttemptId: string; stage: RunActivityContext["stage"] }> = {},
+  ): RunLookup => {
+    const provider = overrides.provider ?? "CODEX";
+    const stageAttemptId = overrides.stageAttemptId ?? "stage-attempt-1";
+    const stage = overrides.stage ?? "IMPLEMENT";
+    return {
+      getAgentRun: (agentRunId) => (agentRunId === "agent-run-1" ? { stageAttemptId, provider } : undefined),
+      getStageAttempt: (id) => (id === stageAttemptId ? { stage } : undefined),
+    };
+  };
+
+  it("resolves provider and stage for every referenced run through the lookup callbacks", () => {
+    const lookup: RunLookup = {
+      getAgentRun: (agentRunId) =>
+        agentRunId === "agent-run-1"
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
+          : agentRunId === "agent-run-2"
+            ? { stageAttemptId: "stage-attempt-2", provider: "CLAUDE_CODE" }
+            : undefined,
+      getStageAttempt: (id) =>
+        id === "stage-attempt-1"
+          ? { stage: "PLAN" }
+          : id === "stage-attempt-2"
+            ? { stage: "REVIEW" }
+            : undefined,
+    };
+    const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
+    expect(result.unresolvedRunIds.size).toBe(0);
+    expect(result.runs).toEqual([
+      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" },
+      { agentRunId: "agent-run-2", provider: "CLAUDE_CODE", stage: "REVIEW" },
+    ]);
+  });
+
+  it("resolves a null provider for a MOCK run instead of guessing a live one", () => {
+    const result = resolveReferencedRuns(["agent-run-1"], workingLookup({ provider: "MOCK" }));
+    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: null, stage: "IMPLEMENT" }]);
+    expect(result.unresolvedRunIds.size).toBe(0);
+  });
+
+  it("marks a run unresolved when its AgentRun cannot be found, without calling getStageAttempt for it", () => {
+    let stageAttemptCalls = 0;
+    const lookup: RunLookup = {
+      getAgentRun: () => undefined,
+      getStageAttempt: () => {
+        stageAttemptCalls += 1;
+        return { stage: "IMPLEMENT" };
+      },
+    };
+    const result = resolveReferencedRuns(["agent-run-missing"], lookup);
+    expect(result.runs).toEqual([]);
+    expect(result.unresolvedRunIds).toEqual(new Set(["agent-run-missing"]));
+    expect(stageAttemptCalls).toBe(0);
+  });
+
+  it("marks a run unresolved when its own StageAttempt cannot be found", () => {
+    // This is fix round 1's "genuinely unresolvable stage" path (packages/persistence-sqlite's
+    // GET_STAGE_ATTEMPT returning nothing for the AgentRun's own stageAttemptId) -- unreachable
+    // through the real command surface (both sources' foreign keys, and the AgentRun's own
+    // stage_attempt_id FK, make an orphan impossible in production), which is exactly why this
+    // needs a plain lookup stub rather than a corrupted SQLite database to exercise directly.
+    const lookup: RunLookup = {
+      getAgentRun: (agentRunId) =>
+        agentRunId === "agent-run-1"
+          ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
+          : undefined,
+      getStageAttempt: () => undefined,
+    };
+    const result = resolveReferencedRuns(["agent-run-1"], lookup);
+    expect(result.runs).toEqual([]);
+    expect(result.unresolvedRunIds).toEqual(new Set(["agent-run-1"]));
+  });
+
+  it("resolves the runs it can and marks only the runs it cannot, in one call", () => {
+    const lookup: RunLookup = {
+      getAgentRun: (agentRunId) =>
+        agentRunId === "agent-run-1"
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
+          : agentRunId === "agent-run-2"
+            ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
+            : undefined,
+      getStageAttempt: (id) => (id === "stage-attempt-1" ? { stage: "PLAN" } : undefined),
+    };
+    const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
+    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" }]);
+    expect(result.unresolvedRunIds).toEqual(new Set(["agent-run-2"]));
   });
 });

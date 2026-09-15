@@ -49,7 +49,6 @@ import {
   launchEvidencePackageResponseSchema,
   launchReleaseProjectResponseSchema,
   guidedDeploymentProjectResponseSchema,
-  liveProviderIdSchema,
   saveLaunchEnvironmentRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
@@ -216,9 +215,10 @@ import {
   buildAgentRunActivityPage,
   decodeCursor,
   resolveAuditedCallsForRead,
+  resolveReferencedRuns,
   MAX_ACTIVITY_PAGE_SIZE,
   type ActivityCursor,
-  type RunActivityContext,
+  type RunLookup,
 } from "./agent-run-activity.js";
 import { cleanupExpiredAgentRunActivity } from "./agent-run-activity-retention.js";
 import { broadcastingState } from "./broadcasting-state.js";
@@ -3501,10 +3501,26 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // one is active, not once one has finished), so an AgentRun from an earlier, already-finished
         // pipeline run would not be found in the snapshot even though its entries are still very much
         // live in both source tables here -- exactly the WorkItem this whole rescoping exists to keep
-        // visible. A run whose stage genuinely cannot be resolved (FK-orphaned, in a corrupted
-        // database) is dropped from this page's entries and flags `degraded`, the same graceful
-        // answer `resolveAuditedCallsForRead` already gives a MOCK run's orphaned audited calls,
-        // rather than 500ing the whole page over one run out of the WorkItem's many.
+        // visible. The resolution itself (fix round 2) lives in `resolveReferencedRuns`
+        // (agent-run-activity.ts), not inline here, so its "stage genuinely cannot be resolved"
+        // fallback is testable with plain lookup stubs instead of a corrupted database; `runLookup`
+        // below is the thin, impure adapter onto `localState.query` that function needs.
+        const runLookup: RunLookup = {
+          getAgentRun: (agentRunId) => {
+            const result = localState.query({ type: "GET_AGENT_RUN", agentRunId });
+            const run = result.type === "AGENT_RUNS" ? result.runs[0] : undefined;
+            return run === undefined
+              ? undefined
+              : { stageAttemptId: run.stageAttemptId, provider: run.provider };
+          },
+          getStageAttempt: (stageAttemptId) => {
+            const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId });
+            return result.type === "STAGE_ATTEMPT" && result.stageAttempt !== null
+              ? { stage: result.stageAttempt.stage }
+              : undefined;
+          },
+        };
+
         const buildFromWindow = (
           window: ReturnType<typeof fetchWindow>,
           cursorForBuild: ActivityCursor | null,
@@ -3515,33 +3531,11 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               ...window.reported.map((entry) => entry.agentRunId),
             ]),
           );
-          const runs: RunActivityContext[] = [];
-          const unresolvedRunIds = new Set<string>();
-          for (const agentRunId of referencedRunIds) {
-            const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId });
-            const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
-            const stageAttemptResult =
-              agentRun === undefined
-                ? undefined
-                : localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId: agentRun.stageAttemptId });
-            const stageAttempt =
-              stageAttemptResult?.type === "STAGE_ATTEMPT" ? stageAttemptResult.stageAttempt : null;
-            if (agentRun === undefined || stageAttempt === null) {
-              unresolvedRunIds.add(agentRunId);
-              continue;
-            }
-            // `null` for MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures,
-            // just not one the activity feed was ever built to carry (`resolveAuditedCallsForRead`
-            // below treats it as "this run's audited calls, if any, are dropped and the page is
-            // flagged degraded", not as a request to fail the whole read).
-            const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
-            runs.push({
-              agentRunId,
-              provider: runProvider.success ? runProvider.data : null,
-              stage: stageAttempt.stage,
-            });
-          }
-          const stageResolutionDegraded = unresolvedRunIds.size > 0;
+          // A run whose stage still cannot be resolved (`unresolvedRunIds`) is dropped from this
+          // page's entries and flags `degraded`, the same graceful answer `resolveAuditedCallsForRead`
+          // below already gives a MOCK run's orphaned audited calls, rather than 500ing the whole page
+          // over one run out of the WorkItem's many.
+          const { runs, unresolvedRunIds } = resolveReferencedRuns(referencedRunIds, runLookup);
           const auditedCalls = window.audited.filter((call) => !unresolvedRunIds.has(call.agentRunId));
           const reportedRows = window.reported.filter((entry) => !unresolvedRunIds.has(entry.agentRunId));
           // A MOCK run that somehow does have audited rows (historical data predating the
@@ -3554,7 +3548,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             reportedRows,
             runs,
             omittedCount: window.omittedCount,
-            degraded: window.degraded || resolvedAudited.degraded || stageResolutionDegraded,
+            degraded: window.degraded || resolvedAudited.degraded || unresolvedRunIds.size > 0,
             cursor: cursorForBuild,
             pageSize: activityPageSize,
           });

@@ -2,6 +2,7 @@ import {
   agentRunActivityEntrySchema,
   agentRunActivityPageSchema,
   activityOriginSchema,
+  liveProviderIdSchema,
   type AgentRunActivityEntry,
   type AgentRunActivityPage,
   type LiveProviderId,
@@ -131,6 +132,82 @@ export type RunActivityContext = {
   // MOCK session through the real workspace-tool gateway either).
   readonly provider: LiveProviderId | null;
   readonly stage: ActivityStage;
+};
+
+// Trimmed to exactly what `resolveReferencedRuns` reads off each row -- a lookup interface rather
+// than a direct SQLite dependency, so the caller (server.ts) supplies real reads while this stays
+// testable with plain objects.
+export type ReferencedAgentRun = {
+  readonly stageAttemptId: string;
+  readonly provider: string;
+};
+
+export type ReferencedStageAttempt = {
+  readonly stage: ActivityStage;
+};
+
+export type RunLookup = {
+  readonly getAgentRun: (agentRunId: string) => ReferencedAgentRun | undefined;
+  readonly getStageAttempt: (stageAttemptId: string) => ReferencedStageAttempt | undefined;
+};
+
+export type ResolvedRuns = {
+  readonly runs: readonly RunActivityContext[];
+  // Referenced by a row in one of the two sources, but its provider/stage could not be resolved --
+  // an AgentRun or StageAttempt the lookup could not find. In production this needs a foreign-key
+  // orphan (both source tables' own FKs, and an AgentRun's `stage_attempt_id` FK, make it otherwise
+  // unreachable), so it is not a shape ordinary traffic produces; it is a shape a corrupted database
+  // could. The caller drops that run's entries and flags the page `degraded` -- the same graceful
+  // answer `resolveAuditedCallsForRead` already gives an orphaned MOCK run's audited calls -- rather
+  // than failing the whole read.
+  readonly unresolvedRunIds: ReadonlySet<string>;
+};
+
+/**
+ * Resolves the provider and stage for every AgentRun a WorkItem-scoped page's two sources reference,
+ * through the caller-supplied `lookup` rather than SQLite directly -- pure and unit-testable, the
+ * same division of labour `buildAgentRunActivityPage` below already draws.
+ *
+ * Fix round 2 (Task 2): lifted out of the route itself (apps/daemon/src/server.ts), which had
+ * resolved this inline via `localState.query`. The unresolvable-stage fallback below is unreachable
+ * through the real command surface (see `ResolvedRuns.unresolvedRunIds`'s own comment), so leaving
+ * the resolution inline in the route would have left that fallback provable only by corrupting a
+ * real SQLite database in an integration test. Lifting it here makes it provable with two plain
+ * lookup stubs instead.
+ */
+export const resolveReferencedRuns = (agentRunIds: readonly string[], lookup: RunLookup): ResolvedRuns => {
+  const runs: RunActivityContext[] = [];
+  const unresolvedRunIds = new Set<string>();
+  for (const agentRunId of agentRunIds) {
+    // Two independent early exits, not one combined condition: the AgentRun lookup failing and the
+    // StageAttempt lookup failing are two different facts about the database, and collapsing them
+    // into `agentRun === undefined || stageAttempt === undefined` reads as two guards but is only
+    // ever one at runtime here -- `stageAttempt` is already forced to `undefined` whenever `agentRun`
+    // is, so the first half of that OR can never be the thing that makes the branch true. Keeping
+    // them separate is what lets a test (and a mutation) tell "the run itself is missing" apart from
+    // "the run exists but its stage does not", which fix round 1's own regression needs told apart.
+    const agentRun = lookup.getAgentRun(agentRunId);
+    if (agentRun === undefined) {
+      unresolvedRunIds.add(agentRunId);
+      continue;
+    }
+    const stageAttempt = lookup.getStageAttempt(agentRun.stageAttemptId);
+    if (stageAttempt === undefined) {
+      unresolvedRunIds.add(agentRunId);
+      continue;
+    }
+    // `null` for MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures, just not
+    // one the activity feed was ever built to carry (`resolveAuditedCallsForRead` below treats it as
+    // "this run's audited calls, if any, are dropped and the page is flagged degraded", not as a
+    // request to fail the whole read).
+    const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
+    runs.push({
+      agentRunId,
+      provider: runProvider.success ? runProvider.data : null,
+      stage: stageAttempt.stage,
+    });
+  }
+  return { runs, unresolvedRunIds };
 };
 
 /**
@@ -328,6 +405,12 @@ export const resolveAuditedCallsForRead = (
  * reported entry can both be `seq: 1`) and now across runs of the same origin too (two different
  * runs' first audited call are both `seq: 1`): it counts its own run's own source, nothing wider.
  * `id` is the only identity a reader -- or a UI keying rows -- can rely on here.
+ *
+ * `input.auditedCalls`/`input.reportedRows` carry one more implicit contract this function relies
+ * on (fix round 2): the caller fetched at most `pageSize + 1` rows per source, its own read-ahead
+ * bound for detecting "is there a next page" (see server.ts's `fetchWindow`). Handed anything else
+ * -- fewer is always fine, but *more* than `pageSize + 1` from one source would defeat the
+ * `sourceMightHoldMore` signal below -- the gap this exists to catch could go undetected again.
  */
 export const buildAgentRunActivityPage = (input: BuildActivityPageInput): AgentRunActivityPage => {
   const pageSize = input.pageSize ?? MAX_ACTIVITY_PAGE_SIZE;
@@ -336,11 +419,24 @@ export const buildAgentRunActivityPage = (input: BuildActivityPageInput): AgentR
   const reported = mapReportedEntries(input.reportedRows, runsById);
   const merged = mergeRunActivity(audited, reported);
 
-  const { index: startIndex, gap } = locateCursor(merged, input.cursor);
+  const { index: startIndex, gap: cursorGap } = locateCursor(merged, input.cursor);
   const endIndex = Math.min(startIndex + pageSize, merged.length);
   const entries = merged.slice(startIndex, endIndex);
   const lastEntry = entries[entries.length - 1];
   const nextCursor = endIndex < merged.length && lastEntry !== undefined ? encodeCursor(lastEntry) : null;
+
+  // A source that handed in exactly `pageSize + 1` rows -- its own read-ahead cap -- might hold more
+  // beyond what it fetched. Ordinarily `nextCursor` already says so (more rows than fit on one
+  // page), but a run of entries sharing one exact sort key can leave the caller's `>= cursor.at`
+  // fetch unable to slide past it on a later page: the same capped window gets re-read every time
+  // (see the query's own comment in packages/persistence-sqlite/src/index.ts), and this page's own
+  // slice can still land exactly at the end of that frozen window. When that combination still
+  // leaves `nextCursor` null -- "nothing more" -- that claim is unverifiable, so this flags `gap`
+  // instead of asserting an end the caller cannot actually see. A documented hole is still a hole if
+  // nothing on screen says so.
+  const sourceMightHoldMore =
+    input.auditedCalls.length === pageSize + 1 || input.reportedRows.length === pageSize + 1;
+  const gap = cursorGap || (nextCursor === null && sourceMightHoldMore);
 
   return agentRunActivityPageSchema.parse({
     entries,

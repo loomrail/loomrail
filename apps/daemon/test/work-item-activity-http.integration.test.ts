@@ -57,11 +57,13 @@ describe("work item activity HTTP boundary", () => {
     });
   };
 
-  it("rejects an unauthenticated request, 404s a missing WorkItem, 400s an undecodable cursor, and answers a valid request with the hardening headers", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity api тест "));
-    directories.push(directory);
+  // Fix round 2: the plan's own Task 2 brief asked for one guard per test, and the reviewer found
+  // the reason why -- bundled into a single `it`, a mutation that breaks 401 aborts the request
+  // before 404, 400 or the headers are ever reached, so only the first broken guard is ever caught.
+  // This seeds a fresh daemon (register, create, ready) per guard so each test's own mutation
+  // evidence stands on its own.
+  const seedReadyWorkItem = async (directory: string): Promise<string> => {
     const state = await openState(directory);
-    let workItemId: string;
     try {
       state.execute({
         schemaVersion: 1,
@@ -94,19 +96,24 @@ describe("work item activity HTTP boundary", () => {
         },
       });
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
-      workItemId = created.workItem.id;
       state.execute({
         schemaVersion: 1,
         commandId: "ready-work-item",
         correlationId: "correlation-ready-work-item",
         actor: { type: "HUMAN", id: "local-owner" },
         type: "MOVE_WORK_ITEM",
-        payload: { workItemId, expectedVersion: 1, targetState: "READY" },
+        payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
       });
+      return created.workItem.id;
     } finally {
       state.close();
     }
+  };
 
+  it("rejects an unauthenticated request with 401", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity 401 тест "));
+    directories.push(directory);
+    const workItemId = await seedReadyWorkItem(directory);
     const token = bootstrapToken();
     daemon = await startDaemon({
       bootstrapToken: token,
@@ -114,33 +121,67 @@ describe("work item activity HTTP boundary", () => {
       stateDatabasePath: join(directory, "state.sqlite"),
       verificationArtifactsDirectory: join(directory, "verification-output"),
     });
-
-    // Unauthenticated: the route requires a session like its neighbours.
     const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`);
     expect(unauthenticated.status).toBe(401);
+  });
 
+  it("returns 404 for a WorkItem that does not exist", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity 404 тест "));
+    directories.push(directory);
+    await seedReadyWorkItem(directory);
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: join(directory, "state.sqlite"),
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
     const session = await authenticate(daemon, token);
-    const authedHeaders = { cookie: session.cookie };
-
     // Scoped by existence: a WorkItem id nothing seeded is 404, not an empty 200 -- same as every
     // other :id-scoped route in this daemon that has no separate project ACL to defer to.
     const missing = await fetch(`${daemon.baseUrl}/api/v1/work-items/work-item-does-not-exist/activity`, {
-      headers: authedHeaders,
+      headers: { cookie: session.cookie },
     });
     expect(missing.status).toBe(404);
+  });
 
-    // A cursor that is not even well-formed base64url/JSON/shape is refused, not silently treated as
-    // "no cursor" -- a regression here would quietly restart the feed instead of telling the caller
-    // their own cursor was rejected.
+  it("returns 400 INVALID_ACTIVITY_CURSOR for a cursor that will not decode", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity 400 тест "));
+    directories.push(directory);
+    const workItemId = await seedReadyWorkItem(directory);
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: join(directory, "state.sqlite"),
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
+    const session = await authenticate(daemon, token);
+    // A cursor that is not even well-formed base64url/JSON/shape is refused, not silently treated
+    // as "no cursor" -- a regression here would quietly restart the feed instead of telling the
+    // caller their own cursor was rejected.
     const malformedCursor = await fetch(
       `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity?after=not-a-real-cursor!!`,
-      { headers: authedHeaders },
+      { headers: { cookie: session.cookie } },
     );
     expect(malformedCursor.status).toBe(400);
     apiErrorResponseSchema.parse(await malformedCursor.json());
+  });
 
+  it("answers a valid request with cache-control: no-store and x-content-type-options: nosniff", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity headers тест "));
+    directories.push(directory);
+    const workItemId = await seedReadyWorkItem(directory);
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: join(directory, "state.sqlite"),
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
+    const session = await authenticate(daemon, token);
     const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`, {
-      headers: authedHeaders,
+      headers: { cookie: session.cookie },
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -661,5 +702,217 @@ describe("work item activity HTTP boundary", () => {
     // The orphaned audited call is dropped from the page, not shown mislabelled with a guessed
     // provider.
     expect(page.entries).toEqual([]);
+  });
+
+  it("flags gap instead of silently truncating when a run of same-timestamp entries outlasts the fetch window", async () => {
+    // Fix round 2, reproduced through the real route: 250 reported rows sharing one observed_at
+    // millisecond outlast the 201-row-per-source fetch window this route uses per page
+    // (MAX_ACTIVITY_PAGE_SIZE + 1). The caller's `>= cursor.at` filter (deliberately inclusive, see
+    // the query's own comment in packages/persistence-sqlite/src/index.ts) re-reads the identical
+    // first 201 rows on every later page, unable to ever slide past the tie -- before this fix, the
+    // feed ended 49 rows short with `gap: false`, `degraded: false`, `nextCursor: null`, a silent
+    // hole. `buildAgentRunActivityPage`'s own new guard (agent-run-activity.ts) now flags `gap`
+    // instead. This is the reviewer's own reproduction; 200+ same-millisecond collisions are not
+    // expected in production (each RECORD_AGENT_RUN_ACTIVITY entry is its own transaction), but the
+    // guard has to hold regardless of how implausible the trigger is.
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity tied timestamps тест "));
+    directories.push(directory);
+    const databasePath = join(directory, "state.sqlite");
+    // Frozen, not ticking (unlike `openState`'s own strictly-increasing clock): every entry below
+    // shares this exact instant.
+    const frozenAt = new Date(timestamp);
+    let nextId = 0;
+    const state = await openLocalState({
+      databasePath,
+      now: () => frozenAt,
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    const template: WorkflowTemplate = {
+      schemaVersion: 1,
+      id: "work-item-activity-tied-timestamps",
+      version: 1,
+      name: "Tied timestamps",
+      stages: [{ stage: "DISCOVERY", ordinal: 0, contextPack }],
+    };
+    let workItemId: string;
+    try {
+      state.execute({
+        schemaVersion: 1,
+        commandId: "register-project",
+        correlationId: "correlation-register-project",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: "project-1",
+          fixtureId: null,
+          name: "Work item activity tied-timestamps fixture",
+          repositoryPath: join(directory, "repo"),
+        },
+      });
+      const created = state.execute({
+        schemaVersion: 1,
+        commandId: "create-work-item",
+        correlationId: "correlation-create-work-item",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-1",
+          parentId: null,
+          type: "TASK",
+          title: "Outlast the fetch window with tied timestamps",
+          description: "Synthetic fixture",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: ["A tie thicker than one page still tells the owner about the hole"],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      workItemId = created.workItem.id;
+      state.execute({
+        schemaVersion: 1,
+        commandId: "ready-work-item",
+        correlationId: "correlation-ready-work-item",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MOVE_WORK_ITEM",
+        payload: { workItemId, expectedVersion: 1, targetState: "READY" },
+      });
+      const pipeline = state.execute({
+        schemaVersion: 1,
+        commandId: "start-pipeline",
+        correlationId: "correlation-start-pipeline",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId,
+          expectedVersion: 2,
+          template,
+          budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      const agent = state.execute({
+        schemaVersion: 1,
+        commandId: "start-agent-run",
+        correlationId: "correlation-start-agent-run",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: pipeline.dispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      const session = state.execute({
+        schemaVersion: 1,
+        commandId: "start-provider-session",
+        correlationId: "correlation-start-provider-session",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId: pipeline.stageAttempt.id,
+          recipe: {
+            schemaVersion: 1,
+            templateId: template.id,
+            templateVersion: template.version,
+            specSource: "ROLE_PLAYBOOK",
+            roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"a".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+
+      for (let index = 0; index < 250; index += 1) {
+        state.execute({
+          schemaVersion: 1,
+          commandId: `activity-${index.toString()}`,
+          correlationId: "correlation-agent-run-activity",
+          actor: { type: "SYSTEM", id: "session-loop" },
+          type: "RECORD_AGENT_RUN_ACTIVITY",
+          payload: {
+            agentRunId: agent.run.id,
+            providerSessionId: session.session.id,
+            provider: "CODEX",
+            entry: {
+              actionKey: `tied-${index.toString()}`,
+              kind: "AGENT_TEXT",
+              label: null,
+              detail: `Entry ${index.toString()}`,
+              status: null,
+              terminal: true,
+              truncated: false,
+            },
+          },
+        });
+      }
+
+      // Completes the session so startDaemon's own startup reconciliation does not mark this run
+      // degraded on its own account -- unrelated to what this test proves, and would make
+      // `degraded` in the assertions below ambiguous.
+      state.execute({
+        schemaVersion: 1,
+        commandId: "complete-discovery",
+        correlationId: "correlation-complete-discovery",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: pipeline.dispatch.id,
+          provider: "CODEX",
+          outcome: { type: "COMPLETED", summary: "Discovery is complete." },
+          template,
+          resultTree: null,
+          sessionCompletion: { providerSessionId: session.session.id, usage: null },
+        },
+      });
+    } finally {
+      state.close();
+    }
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: databasePath,
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
+    const session = await authenticate(daemon, token);
+
+    // Walks pages the way a well-behaved client does: a page flagging `gap: true` is a restart, not
+    // a continuation (the same contract eviction-caused gaps already carried before this fix round),
+    // so this stops there rather than keep summing entries across it -- the gap-rewind fallback
+    // (server.ts) legitimately re-serves entries a client already saw, and a client that kept
+    // blindly following `nextCursor` past a flagged gap here would just replay the same rewound page
+    // forever, which is a client-side bug this test is not the place to reproduce.
+    const seenIds = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 4; page += 1) {
+      const url =
+        cursor === null
+          ? `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`
+          : `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity?after=${encodeURIComponent(cursor)}`;
+      const response = await fetch(url, { headers: { cookie: session.cookie } });
+      expect(response.status).toBe(200);
+      const body = agentRunActivityPageSchema.parse(await response.json());
+      for (const entry of body.entries) seenIds.add(entry.id);
+      if (body.gap) {
+        // Reached: the fix converted what would have been a silent `nextCursor: null` false-
+        // completeness claim into an honest signal instead. That is what this test exists to prove.
+        return;
+      }
+      if (body.nextCursor === null) {
+        // The exact silent-hole shape the reviewer reproduced: nothing said `gap` here, so every
+        // entry must genuinely have been served, or this is the hole this fix round closes.
+        expect(seenIds.size).toBe(250);
+        return;
+      }
+      cursor = body.nextCursor;
+    }
+    throw new Error("Expected the feed to either flag a gap or terminate within 4 pages");
   });
 });
