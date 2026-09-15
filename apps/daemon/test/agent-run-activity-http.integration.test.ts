@@ -26,7 +26,7 @@ const activityTemplate: WorkflowTemplate = {
   stages: [{ stage: "IMPLEMENT", ordinal: 0, contextPack }],
 };
 
-describe("agent run activity HTTP boundary", () => {
+describe("work item activity HTTP boundary (migrated from the deleted AgentRun-scoped route)", () => {
   let daemon: RunningDaemon | undefined;
   const directories: string[] = [];
 
@@ -36,7 +36,7 @@ describe("agent run activity HTTP boundary", () => {
     await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   });
 
-  it("authenticates the caller, scopes by AgentRun existence, and merges both origins", async () => {
+  it("authenticates the caller, scopes by WorkItem existence, and merges both origins", async () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail activity api тест "));
     directories.push(directory);
     const databasePath = join(directory, "state.sqlite");
@@ -56,6 +56,7 @@ describe("agent run activity HTTP boundary", () => {
       createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
     });
     let agentRunId: string;
+    let workItemId: string;
     try {
       state.execute({
         schemaVersion: 1,
@@ -88,6 +89,7 @@ describe("agent run activity HTTP boundary", () => {
         },
       });
       if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      workItemId = created.workItem.id;
       state.execute({
         schemaVersion: 1,
         commandId: "ready-work-item",
@@ -218,15 +220,15 @@ describe("agent run activity HTTP boundary", () => {
     });
 
     // Unauthenticated: the route requires a session like its neighbours.
-    const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/agent-runs/${agentRunId}/activity`);
+    const unauthenticated = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`);
     expect(unauthenticated.status).toBe(401);
 
     const session = await authenticate(daemon, token);
     const authedHeaders = { cookie: session.cookie };
 
-    // Scoped by existence: an AgentRun id nothing seeded is 404, not an empty 200 -- same as every
+    // Scoped by existence: a WorkItem id nothing seeded is 404, not an empty 200 -- same as every
     // other :id-scoped route in this daemon that has no separate project ACL to defer to.
-    const missing = await fetch(`${daemon.baseUrl}/api/v1/agent-runs/agent-run-does-not-exist/activity`, {
+    const missing = await fetch(`${daemon.baseUrl}/api/v1/work-items/work-item-does-not-exist/activity`, {
       headers: authedHeaders,
     });
     expect(missing.status).toBe(404);
@@ -234,13 +236,13 @@ describe("agent run activity HTTP boundary", () => {
     // A cursor that is not even well-formed base64url/JSON/shape is refused, not silently treated as
     // "no cursor".
     const malformedCursor = await fetch(
-      `${daemon.baseUrl}/api/v1/agent-runs/${agentRunId}/activity?after=not-a-real-cursor!!`,
+      `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity?after=not-a-real-cursor!!`,
       { headers: authedHeaders },
     );
     expect(malformedCursor.status).toBe(400);
     apiErrorResponseSchema.parse(await malformedCursor.json());
 
-    const response = await fetch(`${daemon.baseUrl}/api/v1/agent-runs/${agentRunId}/activity`, {
+    const response = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`, {
       headers: authedHeaders,
     });
     expect(response.status).toBe(200);
@@ -264,9 +266,9 @@ describe("agent run activity HTTP boundary", () => {
     expect(page.gap).toBe(false);
     // Not a false positive: this AgentRun's ProviderSession is still RUNNING when the process that
     // seeded it exits, so RECONCILE_WORKFLOWS's own startup pass (synchronous, before `app.listen`
-    // -- see packages/persistence-sqlite/src/index.ts) interrupts it and honestly marks its feed
-    // degraded, the same way a real crash-and-restart would. `degraded` still has to reach the HTTP
-    // response unchanged, which is exactly what this asserts.
+    // -- see packages/persistence-sqlite/src/index.ts) interrupts it and honestly marks the
+    // WorkItem's merged feed degraded, the same way a real crash-and-restart would. `degraded` still
+    // has to reach the HTTP response unchanged, which is exactly what this asserts.
     expect(page.degraded).toBe(true);
   });
 });

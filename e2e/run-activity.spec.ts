@@ -256,6 +256,116 @@ const runActivityAdapter = (): { adapter: ProviderAdapter; releaseSecondActivity
   return { adapter, releaseSecondActivity: release };
 };
 
+/** The path of the audited write `disappearanceAdapter` below performs during IMPLEMENT. */
+const DISAPPEARANCE_WRITE_PATH = "run-activity-disappearance-effect.txt";
+
+/**
+ * Spec docs/plans/128-work-item-activity-spec.ru.md, "Причина": the test this whole plan exists
+ * for. Before this plan, Run Activity was scoped to the CURRENT stage attempt's own AgentRun
+ * (ADR-0034), and the lifecycle Activity timeline had already stopped rendering
+ * WORKSPACE_TOOL_CALL_CHANGED -- so once the pipeline moved past the stage that made an audited
+ * write, that write became visible on no screen at all. `runActivityAdapter` above cannot exercise
+ * this: it deliberately pauses IMPLEMENT on its own NEEDS_HUMAN so IMPLEMENT stays "current" for the
+ * whole test (see that adapter's own doc comment). This one does the opposite on purpose -- IMPLEMENT
+ * completes outright after its write, and REVIEW pauses instead, so by the time the test looks at
+ * Run Activity, IMPLEMENT is a finished, no-longer-current stage attempt.
+ *
+ * Same DISCOVERY/IMPLEMENT-attempt-1 shape as `runActivityAdapter` (so `readyForBudgetApproval`
+ * still applies unmodified): DISCOVERY needs one human choice, IMPLEMENT's first attempt hits its
+ * token budget wall, and only the retry (attempt 2, after the owner raises the budget) actually
+ * runs and performs the real audited write through the bounded workspace-tool gateway.
+ */
+const disappearanceAdapter = (): ProviderAdapter => ({
+  capabilities: () => ({
+    provider: "CODEX",
+    start: true,
+    interrupt: true,
+    eventStream: false,
+    usageReporting: false,
+    contextWindowReporting: false,
+    checkpointOnRequest: false,
+    contextWindowTokens: 128_000,
+    stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+    costReporting: false,
+    tokenBudgetEnforcement: "HARD",
+  }),
+  start: async (invocation, _listener) => {
+    const { stage, attempt } = invocation.session;
+    if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+      return {
+        type: "NEEDS_HUMAN",
+        request: {
+          kind: "SINGLE_CHOICE",
+          blocking: true,
+          title: "Choose the discovery depth",
+          context: "The test delivery pipeline needs one product decision before planning.",
+          recommendation: "Use the focused pass for a bounded task.",
+          options: [
+            {
+              id: "focused-pass",
+              label: "Focused pass",
+              consequence: "Proceed with the smallest sufficient plan.",
+              recommended: true,
+            },
+            {
+              id: "extended-pass",
+              label: "Extended pass",
+              consequence: "Map additional constraints and edge cases.",
+              recommended: false,
+            },
+          ],
+          allowOther: true,
+        },
+      };
+    }
+    if (stage === "IMPLEMENT" && attempt === 1) {
+      return {
+        type: "BUDGET_LIMIT_REACHED",
+        usageIncrements: [50, 30, 15, 5],
+        quality: "LOOMRAIL_ESTIMATE",
+      };
+    }
+    if (stage === "IMPLEMENT") {
+      if (invocation.workspaceTools === undefined) throw new Error("IMPLEMENT has no workspace tools");
+      const effect = await invocation.workspaceTools.execute(
+        {
+          callId: `${invocation.session.id}-run-activity-disappearance-write`,
+          operation: "WRITE_FILE",
+          path: DISAPPEARANCE_WRITE_PATH,
+          expectedSha256: null,
+          content: "Audited implementation effect that must survive a stage advance.\n",
+        },
+        invocation.authoritySignal,
+      );
+      if (effect.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${effect.code}`);
+      // The load-bearing difference from `runActivityAdapter`: completes outright instead of
+      // pausing on IMPLEMENT's own NEEDS_HUMAN, so the pipeline genuinely leaves IMPLEMENT rather
+      // than staying parked on it.
+      return { type: "COMPLETED", summary: "IMPLEMENT completed for the run activity disappearance E2E." };
+    }
+    if (stage === "REVIEW") {
+      // Pausing here, not chaining straight through QA/ACCEPTANCE, is what lets the test observe
+      // Run Activity at a moment when IMPLEMENT is provably no longer `currentStageAttemptId` --
+      // this title is the proof: it can only appear once the daemon has actually dispatched REVIEW.
+      return {
+        type: "NEEDS_HUMAN",
+        request: {
+          kind: "SINGLE_CHOICE",
+          blocking: true,
+          title: "Confirm before QA",
+          context: "Pausing on REVIEW so IMPLEMENT is genuinely no longer the current stage attempt.",
+          recommendation: "Continue once the observation below is done.",
+          options: [{ id: "continue", label: "Continue", consequence: "Move on to QA.", recommended: true }],
+          allowOther: true,
+        },
+      };
+    }
+    return { type: "COMPLETED", summary: `${stage} completed for the run activity disappearance E2E.` };
+  },
+  requestHandoff: () => Promise.resolve(),
+  abortSession: () => Promise.resolve(),
+});
+
 test.describe("run activity", () => {
   // Spec docs/plans/127-agent-run-activity-implementation-plan.ru.md, Task 11: one run, observed the
   // way an owner observes it. The observer page opens once, right after the actor reaches "Budget
@@ -328,5 +438,49 @@ test.describe("run activity", () => {
     const activityTimeline = activityTimelineSectionOf(observerPage, observerInspector);
     await expect(activityTimeline).toBeVisible();
     await expect(activityTimeline.getByText("Write file", { exact: true })).toHaveCount(0);
+  });
+
+  // docs/plans/129-work-item-activity-implementation-plan.ru.md, Task 4 Step 2 -- the test this
+  // whole plan exists for. Spec 128's "Причина" names the exact failure: before this plan, Run
+  // Activity was scoped to the current stage attempt's own AgentRun, so an audited action made on an
+  // earlier stage became visible on no screen at all once the pipeline moved on (the lifecycle
+  // Activity timeline had already stopped rendering WORKSPACE_TOOL_CALL_CHANGED). This drives a real
+  // pipeline through IMPLEMENT's own audited write, on to REVIEW, and asserts the write is still
+  // there -- grouped under IMPLEMENT, not silently dropped or relabelled under REVIEW.
+  test("keeps an IMPLEMENT-stage audited write visible in Run Activity once the pipeline has advanced to REVIEW", async ({
+    page,
+  }) => {
+    const title = "Run activity survives a stage advance";
+    const inspector = await openWorkbench(page, title, disappearanceAdapter());
+    await readyForBudgetApproval(page, inspector);
+
+    // The one click that starts IMPLEMENT's retry -- the attempt that actually performs the write.
+    const workflowSection = workflowSectionOf(page, inspector);
+    await workflowSection.getByLabel("Hard token budget").fill("200");
+    await workflowSection.getByRole("button", { name: "Approve cost policy" }).click();
+
+    // Proof the pipeline genuinely left IMPLEMENT: this heading only ever comes from the adapter's
+    // REVIEW branch (IMPLEMENT's own retry completes silently, with no NEEDS_HUMAN of its own), so
+    // seeing it means the daemon has already dispatched a stage attempt past the one that wrote.
+    await expect(inspector.getByRole("heading", { name: "Confirm before QA" })).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const runActivity = runActivitySectionOf(page, inspector);
+    await runActivity.locator("summary").click();
+    const entryList = runActivity.locator(".run-activity__entries");
+
+    // The disappearance this plan exists to close: IMPLEMENT's own audited write, made on a stage
+    // attempt that is no longer current, is still visible now that REVIEW is current.
+    await expect(entryList.getByText("Write file", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(entryList.getByText("Verified by Loomrail", { exact: true })).toBeVisible();
+
+    // Not just present anywhere on the page -- correctly attributed to IMPLEMENT's own group, not
+    // folded silently into whatever group REVIEW's (empty, so far) run would form.
+    const implementGroup = runActivity
+      .locator(".run-activity__group")
+      .filter({ has: page.getByText("Implementation", { exact: true }) });
+    await expect(implementGroup).toHaveCount(1);
+    await expect(implementGroup.getByText(DISAPPEARANCE_WRITE_PATH, { exact: true })).toBeVisible();
   });
 });
