@@ -1386,9 +1386,15 @@ const en = {
   "runActivity.untitled": "Action",
   "runActivity.truncated": "Truncated",
   "runActivity.degradedBadge": "Incomplete",
-  "runActivity.degraded":
-    "This feed is incomplete: something kept a recorder from writing to it during this run.",
-  "runActivity.gap": "Earlier entries were pruned, so this list restarts from the oldest one still kept.",
+  // Names the consequence only, never a mechanism or a run -- the same correction Ruling S13 made
+  // to `runActivity.gap`, applied to its twin. `degraded` ORs three unrelated facts: the stored
+  // recorder flag, aggregated across EVERY run of this task; a run whose stage would not resolve;
+  // and audited rows for a run with no live provider. Only the first is a recorder write failure,
+  // none of them is scoped to one run, and the feed itself is the task's, not a run's -- so "a
+  // recorder could not write during this run" was false on two counts at once.
+  "runActivity.degraded": "This feed is incomplete: some of what happened on this task did not reach it.",
+  "runActivity.gap":
+    "This list may be incomplete: Loomrail cannot confirm that every recorded entry for this task is shown here.",
   "runActivity.omitted": "{count} earlier entries were dropped because storage is limited.",
   "runActivity.loadMore": "Show more",
   "field.title": "title",
@@ -2785,8 +2791,9 @@ const ru = {
   "runActivity.untitled": "Действие",
   "runActivity.truncated": "Обрезано",
   "runActivity.degradedBadge": "Неполно",
-  "runActivity.degraded": "Эта лента неполна: что-то помешало записи во время этого прогона.",
-  "runActivity.gap": "Более ранние записи были вытеснены, список начинается с самой старой из оставшихся.",
+  "runActivity.degraded": "Эта лента неполна: часть происходившего по этой задаче в неё не попала.",
+  "runActivity.gap":
+    "Список может быть неполным: Loomrail не может подтвердить, что здесь показаны все записанные действия этой задачи.",
   "runActivity.omitted": "{count} более ранних записей были отброшены из-за ограниченного хранения.",
   "runActivity.loadMore": "Показать ещё",
   "field.title": "название",

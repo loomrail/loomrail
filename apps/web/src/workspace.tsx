@@ -72,8 +72,8 @@ import {
   getVerificationPlanSettings,
   getAttentionInbox,
   getAgentFleet,
-  getAgentRunActivity,
   getInsights,
+  getWorkItemActivity,
   getWorkItemChanges,
   getWorkItemFileDiff,
   getWorkItemQA,
@@ -171,8 +171,13 @@ const workItemEventsKey = (projectId: string, workItemId: string) =>
 // (session-loop.ts, publishActivitySignal, called from the same place that marks a feed
 // `degraded`) -- a second, direct publish path into the same channel, not routed through the Event
 // log at all. Both land on the same scope this key sits under, so one query key covers both.
-const workItemRunActivityKey = (workItemId: string, agentRunId: string) =>
-  ["work-items", workItemId, "run-activity", agentRunId] as const;
+//
+// Spec 128 rescoped the feed itself from one AgentRun to the whole WorkItem, and this key follows:
+// no `agentRunId` segment, since one query now covers the task's entire run history. That is also
+// what keeps `useWorkItemActivity` (below) usable across a stage transition without a query-key
+// change of its own -- the previous per-run key meant a fresh AgentRun forced a fresh query
+// (loading state, no data yet) even though the owner was still looking at the same task.
+const workItemActivityKey = (workItemId: string) => ["work-items", workItemId, "activity"] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
 const workItemVerificationRunsKey = (workItemId: string) =>
   ["work-items", workItemId, "verification-runs"] as const;
@@ -313,28 +318,27 @@ export const useAgentFleet = () =>
   });
 
 /**
- * One AgentRun's merged Run Activity feed (Task 8), read oldest first and paged forward with
- * `nextCursor` -- "a run's story", not a newest-first ticker. The first page is fetched eagerly
- * (one bounded round trip, nowhere near "paging the whole feed") so `degraded`/`omittedCount` are
- * known as soon as the AgentRun is; RunActivitySection.tsx gates only the *rendering* of the full
- * list behind the owner's own expand (spec: "не становится основным содержимым Cockpit"), and
- * fetches further pages only on an explicit "Show more", never walked automatically to find a
- * tail. That is also why the collapsed summary prefers Agent Fleet's own newest-first
- * `latestAction` (Task 10, `useAgentFleet`) over this oldest-first page's own last row.
+ * A WorkItem's merged Run Activity feed (spec 128 / ADR-0034), read oldest first and paged forward
+ * with `nextCursor` -- "the task's story", not a newest-first ticker. Spans every AgentRun the task
+ * has produced, not only the current stage attempt's: an action audited on an earlier stage stays
+ * visible here after the pipeline advances past it. The first page is fetched eagerly (one bounded
+ * round trip, nowhere near "paging the whole feed") so `degraded`/`omittedCount` are known as soon
+ * as the WorkItem is; RunActivitySection.tsx gates only the *rendering* of the full list behind the
+ * owner's own expand (spec: "не становится основным содержимым Cockpit"), and fetches further
+ * pages only on an explicit "Show more", never walked automatically to find a tail. That is also
+ * why the collapsed summary prefers Agent Fleet's own newest-first `latestAction` (`useAgentFleet`)
+ * over this oldest-first page's own last row.
  */
-export const useAgentRunActivity = (workItemId: string | undefined, agentRunId: string | undefined) =>
+export const useWorkItemActivity = (workItemId: string | undefined) =>
   useInfiniteQuery({
-    queryKey:
-      workItemId && agentRunId
-        ? workItemRunActivityKey(workItemId, agentRunId)
-        : ["work-items", "none", "run-activity", "none"],
+    queryKey: workItemId ? workItemActivityKey(workItemId) : ["work-items", "none", "activity"],
     queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
-      if (!agentRunId) throw new Error("An AgentRun is required to load its Run Activity");
-      return getAgentRunActivity(agentRunId, pageParam);
+      if (!workItemId) throw new Error("A WorkItem is required to load its Run Activity");
+      return getWorkItemActivity(workItemId, pageParam);
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-    enabled: workItemId !== undefined && agentRunId !== undefined,
+    enabled: workItemId !== undefined,
   });
 
 export const useInsights = () =>

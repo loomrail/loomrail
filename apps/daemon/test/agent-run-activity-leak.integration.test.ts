@@ -171,8 +171,9 @@ describe("agent run activity leak canaries", () => {
     if (!acceptancePackage) throw new Error("Expected a pending AcceptancePackage");
 
     // Sanity: the fixture is not vacuous. This provider's own diagnostic view is exactly where the
-    // text is SUPPOSED to be visible -- it is every other surface that must not carry it. Every
-    // stage attempt is checked because the scripted adapter reports on each of its own sessions.
+    // text is SUPPOSED to be visible -- it is every other surface that must not carry it. The feed
+    // is WorkItem-scoped (spec 128), so every stage attempt's session is checked against the same
+    // one merged page rather than a page fetched per AgentRun.
     let sawCanaryInActivity = false;
     for (const attempt of awaitingAcceptance.stageAttempts) {
       const sessionsResponse = await fetch(`${daemon.baseUrl}/api/v1/stage-attempts/${attempt.id}/sessions`, {
@@ -181,10 +182,9 @@ describe("agent run activity leak canaries", () => {
       const sessions = providerSessionsResponseSchema.parse(await sessionsResponse.json());
       for (const providerSession of sessions.sessions) {
         if (providerSession.agentRunId === null) continue;
-        const activityResponse = await fetch(
-          `${daemon.baseUrl}/api/v1/agent-runs/${providerSession.agentRunId}/activity`,
-          { headers: { cookie: session.cookie } },
-        );
+        const activityResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`, {
+          headers: { cookie: session.cookie },
+        });
         const page = agentRunActivityPageSchema.parse(await activityResponse.json());
         if (JSON.stringify(page).includes(CANARY)) sawCanaryInActivity = true;
       }
@@ -299,10 +299,10 @@ describe("agent run activity leak canaries", () => {
   // convention is redacted before it reaches storage; an absolute path outside the worktree becomes
   // the opaque marker rather than a personal path; and a path INSIDE the worktree -- spaces and
   // Cyrillic, task-11-brief step 2b -- survives as a plain relative one. All three visible through
-  // the merged, owner-facing HTTP feed (`/api/v1/agent-runs/:id/activity`), not only the raw buffer
-  // query `session-activity.integration.test.ts` already pins (whose own inside-worktree coverage is
-  // ASCII-only, `src/a.ts`, and so could never have caught a normalisation defect that only shows up
-  // on non-ASCII bytes).
+  // the merged, owner-facing HTTP feed (`/api/v1/work-items/:workItemId/activity`), not only the raw
+  // buffer query `session-activity.integration.test.ts` already pins (whose own inside-worktree
+  // coverage is ASCII-only, `src/a.ts`, and so could never have caught a normalisation defect that
+  // only shows up on non-ASCII bytes).
   //
   // The redaction value is supplied the same way production supplies it (`secretRedactions`,
   // apps/daemon/src/server.ts): an environment variable whose NAME looks like a credential. No
@@ -386,10 +386,13 @@ describe("agent run activity leak canaries", () => {
         { headers: { cookie: session.cookie } },
       );
       const sessions = providerSessionsResponseSchema.parse(await sessionsResponse.json());
+      // Kept as a guard even though the WorkItem-scoped route below no longer needs the id itself:
+      // it still confirms DISCOVERY's write is held by a real AgentRun, not merely present in a
+      // ProviderSession row with nothing behind it.
       const agentRunId = sessions.sessions[0]?.agentRunId;
       if (!agentRunId) throw new Error("Expected DISCOVERY's ProviderSession to name an AgentRun");
 
-      const activityResponse = await fetch(`${daemon.baseUrl}/api/v1/agent-runs/${agentRunId}/activity`, {
+      const activityResponse = await fetch(`${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`, {
         headers: { cookie: session.cookie },
       });
       expect(activityResponse.status).toBe(200);

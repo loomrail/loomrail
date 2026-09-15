@@ -1,6 +1,7 @@
 # ADR-0034: Bounded diagnostic provider activity
 
-**Status:** Accepted
+**Status:** Accepted; the current-stage-attempt bound on Run Activity lifted by spec 128
+(`docs/plans/128-work-item-activity-spec.ru.md`)
 
 **Date:** 2026-09-15
 
@@ -111,12 +112,19 @@ timestamps.
 The cursor is opaque base64url over that same triple, parsed back through a `.strict()` schema; a malformed or
 forged cursor is refused with `INVALID_ACTIVITY_CURSOR` rather than silently treated as "start again", and a
 cursor naming a position that has since been pruned restarts the page from the oldest entry still held with
-`gap: true` so the owner is told about the hole. `seq` is monotonic within one source and not dense, and it is
-not the cursor.
+`gap: true` so the owner is told about the hole. That is no longer `gap`'s only trigger: spec 128 also sets it
+when a source comes back at its read-ahead cap and the page still ends with no next cursor, where "nothing
+more" is a claim the read cannot support. `gap` therefore means "this page may be incomplete", not
+specifically "something was pruned", and only the pruned-cursor case restarts the page -- restarting on the
+wider signal would re-serve the feed's first entries to a client that keeps paging forward. `seq` is monotonic within one source and not dense, and it is not the cursor; under
+spec 128's WorkItem-wide page that monotonicity holds within one source **per run**, so one source's numbering
+restarts at 1 at each run boundary.
 
 The audited action leaves the WorkItem Activity timeline for good: `WORKSPACE_TOOL_CALL_CHANGED` no longer
 renders there, which stays the work item's lifecycle history, and that exclusion does not depend on pipeline
-progress. Run Activity picks the same action up next -- but not for as long; see Consequences for the bound.
+progress. Run Activity picks the same action up next. As decided here it did so only for the current stage
+attempt's run, which bounded how long the action stayed visible; that bound has since been lifted -- see
+Consequences.
 
 ### Storage is deliberately mutable and prunable
 
@@ -179,7 +187,10 @@ debounced to at most one per 250 ms so a chatty run does not become a stream of 
 `GET /api/v1/agent-runs/:runId/activity` is authenticated like every other read, scoped by AgentRun existence
 exactly as the neighbouring `:id` routes are, and answers with `cache-control: no-store` and
 `x-content-type-options: nosniff`. A page carries at most 200 entries plus `nextCursor`, `omittedCount`,
-`degraded` and `gap`.
+`degraded` and `gap`. Spec 128 has since replaced that route with
+`GET /api/v1/work-items/:workItemId/activity`, scoped by WorkItem existence, and deleted the AgentRun-scoped
+one; everything else stated here about the read -- its authentication, its two headers and its page shape --
+is unchanged.
 
 In the Task Cockpit the section is collapsed to the latest action and a count; its body is absent from the DOM
 entirely until the owner expands it, so a long run costs nothing to render until it is asked for. Origin is
@@ -191,15 +202,21 @@ nothing interprets it as Markdown, HTML or a link.
 ## Consequences
 
 - The owner can see what an agent is doing while it runs, and what it did in a finished run, without a raw log
-  and without the feed being able to claim anything -- but only for the WorkItem's _current_ stage attempt.
-  Run Activity reads `run.currentStageAttemptId`'s latest AgentRun (`RunActivitySection.tsx`), not the
-  WorkItem's whole run history: once the pipeline advances past the stage attempt that made an audited call,
-  that call's `WORKSPACE_TOOL_CALL_CHANGED` row stops being visible in Run Activity too -- and it already left
-  the WorkItem Activity timeline for good (see above), so at that point it is visible on no screen. The row
-  itself is not lost -- it stays in the append-only `workspace_tool_calls` table -- and the file change it
-  produced stays visible in the Changes section regardless of pipeline progress; only the audited-action view
-  of it narrows. Widening Run Activity to the WorkItem's whole run history, not just the current attempt, is
-  separate follow-up work, outside this ADR's scope.
+  and without the feed being able to claim anything. As decided here that view was bounded to the WorkItem's
+  _current_ stage attempt: Run Activity read `run.currentStageAttemptId`'s latest AgentRun, not the WorkItem's
+  whole run history, so once the pipeline advanced past the stage attempt that made an audited call, that
+  call's `WORKSPACE_TOOL_CALL_CHANGED` row stopped being visible in Run Activity too -- and it had already left
+  the WorkItem Activity timeline for good (see above), so at that point it was visible on no screen. **That
+  bound is lifted.** `docs/plans/128-work-item-activity-spec.ru.md` rebound the feed to the WorkItem itself: a
+  WorkItem-scoped route replaces the AgentRun-scoped one, both source reads filter on the `work_item_id` column
+  their own tables already carried (migrations 0055 and 0062), and every entry now carries its own
+  `agentRunId` and `stage`, so the section shows the task's whole run history grouped by run, each group named
+  by its stage. No run number travels with the entry: `agent_runs.ordinal` is unique per StageAttempt, so a
+  stage retry restarts it at 1 and two adjacent groups for two attempts of one stage would carry the same
+  number. Nothing else decided here moved with it: the two origins, their
+  separate storage, the read-time merge, the bounds, the redaction and the feed's lack of authority all stand.
+  The row itself was never lost -- it stays in the append-only `workspace_tool_calls` table -- and the file
+  change it produced stayed visible in the Changes section throughout, regardless of pipeline progress.
 - The two authorities stay legible. An audited action and a provider claim are stored apart, labelled apart and
   described apart in the UI, so the feed cannot quietly launder a provider's account into evidence.
 - Untrusted provider text now reaches the owner's UI on a new surface. It is bounded, redacted, stripped of

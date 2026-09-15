@@ -914,3 +914,648 @@ describe("latest agent run activity", () => {
     });
   });
 });
+
+// Task 1 of the follow-up plan (docs/plans/129): the feed's unit moves from AgentRun to WorkItem.
+// A WorkItem's Run Activity now has to span every run the pipeline made against it, not just the
+// current stage attempt's -- otherwise an audited action a finished stage made becomes visible on
+// no screen at all (spec 128's whole reason for existing). This suite proves the two work-item-
+// scoped reads that make that possible: `agent_run_activity` and `workspace_tool_calls` both
+// already carry `work_item_id` as their own column, so both reads filter on it directly -- no join
+// through `agent_runs` -- and this is what pins that down against a real command surface.
+describe("work item activity", () => {
+  let temporaryDirectory = "";
+  let databasePath = "";
+  let state: LocalState | undefined;
+  let nextId = 0;
+  let clockOffsetMs = 0;
+
+  beforeEach(async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail work item activity тест "));
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    clockOffsetMs = 0;
+  });
+
+  afterEach(async () => {
+    state?.close();
+    state = undefined;
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  // Same reasoning as the "agent run activity" describe block's own clock: `observed_at` (and
+  // `started_at` for the audited side) must strictly increase with insertion order, including
+  // across the thousand-plus commands the aggregation test below issues.
+  const tick = (): Date => {
+    clockOffsetMs += 1;
+    return new Date(new Date(timestamp).getTime() + clockOffsetMs);
+  };
+
+  const open = async (): Promise<LocalState> => {
+    state = await openLocalState({
+      databasePath,
+      now: tick,
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    return state;
+  };
+
+  // Two stages, not one: this suite's whole point is a feed spanning more than one AgentRun, and a
+  // WorkItem only ever gets a second one by finishing the first stage and starting the next.
+  // Neither stage is IMPLEMENT, so completing one never has to satisfy the audited-mutation gate
+  // that stage alone carries -- irrelevant to what this suite is testing.
+  const workItemActivityTemplate: WorkflowTemplate = {
+    schemaVersion: 1,
+    id: "work-item-activity-template",
+    version: 1,
+    name: "Work item activity",
+    stages: [
+      { stage: "DISCOVERY", ordinal: 0, contextPack },
+      { stage: "PLAN", ordinal: 1, contextPack },
+    ],
+  };
+
+  // `projectSuffix` keeps two fixtures opened against the same LocalState (the "excludes another
+  // task's entries" tests need exactly that) from colliding on REGISTER_PROJECT's own uniqueness
+  // check, the same reasoning the "latest agent run activity" suite above states for its own copy.
+  const startWorkItemExecution = (
+    localState: LocalState,
+    projectSuffix: string,
+  ): { workItemId: string; dispatchId: string; stageAttemptId: string; run: ActivityFixture } => {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `register-project-${projectSuffix}`,
+      correlationId: `correlation-register-project-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: `project-${projectSuffix}`,
+        fixtureId: null,
+        name: "Work item activity fixture",
+        repositoryPath: join(temporaryDirectory, `repo-${projectSuffix}`),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: `create-work-item-${projectSuffix}`,
+      correlationId: `correlation-create-work-item-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: `project-${projectSuffix}`,
+        parentId: null,
+        type: "TASK",
+        title: "Record work item activity",
+        description: "Synthetic fixture",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Work item activity is durable"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `ready-work-item-${projectSuffix}`,
+      correlationId: `correlation-ready-work-item-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-pipeline-${projectSuffix}`,
+      correlationId: `correlation-start-pipeline-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: workItemActivityTemplate,
+        budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const run = startAgentRunAndSession(
+      localState,
+      projectSuffix,
+      "discovery",
+      pipeline.dispatch.id,
+      pipeline.stageAttempt.id,
+    );
+    return {
+      workItemId: created.workItem.id,
+      dispatchId: pipeline.dispatch.id,
+      stageAttemptId: pipeline.stageAttempt.id,
+      run,
+    };
+  };
+
+  const startAgentRunAndSession = (
+    localState: LocalState,
+    projectSuffix: string,
+    stageLabel: string,
+    dispatchId: string,
+    stageAttemptId: string,
+  ): ActivityFixture => {
+    const agent = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-agent-run-${projectSuffix}-${stageLabel}`,
+      correlationId: `correlation-start-agent-run-${projectSuffix}-${stageLabel}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+    const session = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-provider-session-${projectSuffix}-${stageLabel}`,
+      correlationId: `correlation-start-provider-session-${projectSuffix}-${stageLabel}`,
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId,
+        recipe: {
+          schemaVersion: 1,
+          templateId: workItemActivityTemplate.id,
+          templateVersion: workItemActivityTemplate.version,
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"a".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+        },
+      },
+    });
+    if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+    return { agentRunId: agent.run.id, providerSessionId: session.session.id, provider: "CODEX" };
+  };
+
+  // Completes the DISCOVERY dispatch this run holds (ending its session and finishing its
+  // AgentRun, which frees the WorkItem's "one active AgentRun" slot) and hands back the PLAN
+  // dispatch the pipeline advances to -- the second AgentRun's own starting point.
+  const advanceToNextStage = (
+    localState: LocalState,
+    projectSuffix: string,
+    dispatchId: string,
+    run: ActivityFixture,
+    workItemId: string,
+  ): { dispatchId: string; stageAttemptId: string } => {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `complete-discovery-${projectSuffix}`,
+      correlationId: `correlation-complete-discovery-${projectSuffix}`,
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "APPLY_PROVIDER_OUTCOME",
+      payload: {
+        dispatchId,
+        provider: "CODEX",
+        outcome: { type: "COMPLETED", summary: "Discovery is complete." },
+        template: workItemActivityTemplate,
+        resultTree: null,
+        sessionCompletion: { providerSessionId: run.providerSessionId, usage: null },
+      },
+    });
+    const pending = localState.query({ type: "LIST_PENDING_DISPATCHES" });
+    if (pending.type !== "WORKFLOW_DISPATCHES") throw new Error("Expected dispatch queue");
+    // Filtered by WorkItem, not just "the first pending dispatch": this suite opens two fixtures
+    // against the same LocalState, so a stray dispatch from the other one would otherwise be
+    // picked up silently instead of this one failing loudly.
+    const dispatch = pending.dispatches.find((candidate) => candidate.workItemId === workItemId);
+    if (!dispatch) throw new Error("Expected the PLAN dispatch");
+    return { dispatchId: dispatch.id, stageAttemptId: dispatch.stageAttemptId };
+  };
+
+  const recordActivity = (fixture: ActivityFixture, actionKey: string, label: string) => ({
+    schemaVersion: 1 as const,
+    commandId: `activity-${fixture.providerSessionId}-${actionKey}`,
+    correlationId: "correlation-agent-run-activity",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "RECORD_AGENT_RUN_ACTIVITY" as const,
+    payload: {
+      agentRunId: fixture.agentRunId,
+      providerSessionId: fixture.providerSessionId,
+      provider: fixture.provider,
+      entry: {
+        actionKey,
+        kind: "TOOL_CALL" as const,
+        label,
+        detail: null,
+        status: "ok",
+        terminal: true,
+        truncated: false,
+      },
+    },
+  });
+
+  const markDegraded = (agentRunId: string, commandId: string) => ({
+    schemaVersion: 1 as const,
+    commandId,
+    correlationId: "correlation-mark-agent-run-activity-degraded",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED" as const,
+    payload: { agentRunId },
+  });
+
+  const startWorkspaceToolCall = (
+    fixture: ActivityFixture,
+    providerCallKey: string,
+    operation: WorkspaceToolOperation,
+    target: string,
+  ) => ({
+    schemaVersion: 1 as const,
+    commandId: `workspace-tool-${fixture.providerSessionId}-${providerCallKey}`,
+    correlationId: "correlation-workspace-tool-call",
+    actor: { type: "SYSTEM" as const, id: "workspace-executor" },
+    type: "START_WORKSPACE_TOOL_CALL" as const,
+    payload: {
+      providerSessionId: fixture.providerSessionId,
+      providerCallKey,
+      operation,
+      target,
+      policyDigest: "b".repeat(64),
+      inputDigest: "c".repeat(64),
+    },
+  });
+
+  const readWorkItemActivity = (localState: LocalState, workItemId: string, limit = 200) => {
+    const page = localState.query({ type: "LIST_WORK_ITEM_ACTIVITY", workItemId, limit });
+    if (page.type !== "WORK_ITEM_ACTIVITY") throw new Error("Expected a work item activity page");
+    return page;
+  };
+
+  it("collects entries from two different runs of one task in a single, ordered read", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(execution.run, "c1", "Explored the repository"));
+    localState.execute(recordActivity(execution.run, "c2", "Read package.json"));
+
+    const nextStage = advanceToNextStage(
+      localState,
+      "p1",
+      execution.dispatchId,
+      execution.run,
+      execution.workItemId,
+    );
+    const secondRun = startAgentRunAndSession(
+      localState,
+      "p1",
+      "plan",
+      nextStage.dispatchId,
+      nextStage.stageAttemptId,
+    );
+    localState.execute(recordActivity(secondRun, "c3", "Drafted the plan"));
+
+    const page = readWorkItemActivity(localState, execution.workItemId);
+    expect(page.entries.map((entry) => entry.agentRunId)).toEqual([
+      execution.run.agentRunId,
+      execution.run.agentRunId,
+      secondRun.agentRunId,
+    ]);
+    expect(page.entries.map((entry) => entry.label)).toEqual([
+      "Explored the repository",
+      "Read package.json",
+      "Drafted the plan",
+    ]);
+    // `(observed_at, id)` order across the run boundary, not merely "grouped by run": the second
+    // run's entry must sort after both of the first run's, not just appear after them by luck of
+    // insertion order.
+    const observedTimes = page.entries.map((entry) => entry.observedAt);
+    expect([...observedTimes].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))).toEqual(
+      observedTimes,
+    );
+    // Neither run ever evicted or degraded: the healthy-path aggregation must read 0/false, not
+    // leave the field undefined or throw over the "no counters row past SQL's own NULL" case (see
+    // the dedicated empty-WorkItem test below for that case in isolation).
+    expect(page.omittedCount).toBe(0);
+    expect(page.degraded).toBe(false);
+  });
+
+  it("reads omittedCount 0 and degraded false for a task with no recorded activity yet", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+
+    // No RECORD_AGENT_RUN_ACTIVITY and no MARK_AGENT_RUN_ACTIVITY_DEGRADED for this run: its
+    // `agent_run_activity_state` row does not exist yet, so the aggregation query's join finds
+    // nothing to aggregate. SQL's own SUM/MAX over zero grouped rows is NULL, not 0 -- this pins
+    // the COALESCE that turns that NULL into the honest "not omitted, not degraded" reading rather
+    // than a schema-parse crash or an undefined field.
+    const page = readWorkItemActivity(localState, execution.workItemId);
+    expect(page.entries).toEqual([]);
+    expect(page.omittedCount).toBe(0);
+    expect(page.degraded).toBe(false);
+  });
+
+  it("excludes another task's entries", async () => {
+    const localState = await open();
+    const first = startWorkItemExecution(localState, "p1");
+    const second = startWorkItemExecution(localState, "p2");
+    localState.execute(recordActivity(first.run, "c1", "First task action"));
+    localState.execute(recordActivity(second.run, "c1", "Second task action"));
+
+    const page = readWorkItemActivity(localState, first.workItemId);
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]).toMatchObject({
+      agentRunId: first.run.agentRunId,
+      label: "First task action",
+    });
+  });
+
+  it("honours the limit", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(execution.run, "c1", "First"));
+    localState.execute(recordActivity(execution.run, "c2", "Second"));
+    localState.execute(recordActivity(execution.run, "c3", "Third"));
+
+    const page = readWorkItemActivity(localState, execution.workItemId, 2);
+    expect(page.entries).toHaveLength(2);
+    expect(page.entries.map((entry) => entry.label)).toEqual(["First", "Second"]);
+  });
+
+  // The aggregation this task's brief asked for a documented decision on: one SQL query, summing
+  // `omitted_count` and OR-ing `degraded` across every run the WorkItem has, rather than one read
+  // per run. The two runs below are pushed past their own 1_000-row eviction bound by different
+  // amounts (1 and 2) specifically so their sum (3) cannot be produced by a wrong aggregation that
+  // picks one run's count, or takes the larger of the two (`MAX`) instead of summing -- either of
+  // those bugs would read back 1 or 2, never 3.
+  //
+  // The *later* (PLAN) run, not the temporally-first one, is the one marked degraded. That is
+  // deliberate, not arbitrary: a fix-round review found that marking the first-created run left
+  // this test unable to tell `COALESCE(MAX(state.degraded), 0)` apart from the un-aggregated
+  // `COALESCE(state.degraded, 0)` -- a bug that drops the OR-across-runs semantics and just reads
+  // one arbitrary row's column. SQLite's query plan for that bug happened to surface the
+  // first-created run's value here, so a fixture that only ever degrades the first run cannot
+  // distinguish the two implementations. Degrading the later run instead means a "some arbitrary
+  // row" implementation reads back `false` (or the wrong run's status) rather than `true`. See the
+  // dedicated "regardless of which run degraded" test below for the same property proven cheaply,
+  // in both directions, without the 1_000+ row eviction cost this test pays for the sum.
+  it("aggregates omittedCount and degraded across the task's runs", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    for (let index = 0; index < 1_001; index += 1) {
+      localState.execute(recordActivity(execution.run, `c${index.toString()}`, "Repeated discovery action"));
+    }
+    const nextStage = advanceToNextStage(
+      localState,
+      "p1",
+      execution.dispatchId,
+      execution.run,
+      execution.workItemId,
+    );
+    const secondRun = startAgentRunAndSession(
+      localState,
+      "p1",
+      "plan",
+      nextStage.dispatchId,
+      nextStage.stageAttemptId,
+    );
+    for (let index = 0; index < 1_002; index += 1) {
+      localState.execute(recordActivity(secondRun, `d${index.toString()}`, "Repeated plan action"));
+    }
+    localState.execute(markDegraded(secondRun.agentRunId, "mark-degraded-plan-run"));
+
+    const page = readWorkItemActivity(localState, execution.workItemId, 2_000);
+    expect(page.omittedCount).toBe(3);
+    expect(page.degraded).toBe(true);
+  });
+
+  // Cheap complement to the omittedCount-summing test above: proves `degraded` is a true
+  // disjunction across every run of the task -- not a read of one arbitrary run's column -- in
+  // BOTH directions, so neither "always reads the first-created run" nor "always reads the
+  // last-created run" can pass.
+  //
+  // Both runs of each WorkItem below are given their own `recordActivity` call before either is
+  // marked, specifically so BOTH carry an `agent_run_activity_state` row and the aggregation's join
+  // genuinely has two contending rows to pick from. Skipping that step (as an earlier version of
+  // this test did) leaves the non-degraded run with no counters row at all -- the join then has
+  // only one row per WorkItem, which a "reads one arbitrary row" implementation satisfies exactly
+  // as well as a real `MAX`, so the test cannot tell them apart. Confirmed against the reviewer's
+  // exact `COALESCE(MAX(state.degraded), 0)` -> `COALESCE(state.degraded, 0)` mutation: without
+  // this fix that mutation passed every test in the file; with it, this test fails.
+  it("flags the task degraded regardless of which run degraded", async () => {
+    const localState = await open();
+
+    const earlierDegraded = startWorkItemExecution(localState, "p1");
+    const earlierNextStage = advanceToNextStage(
+      localState,
+      "p1",
+      earlierDegraded.dispatchId,
+      earlierDegraded.run,
+      earlierDegraded.workItemId,
+    );
+    const earlierSecondRun = startAgentRunAndSession(
+      localState,
+      "p1",
+      "plan",
+      earlierNextStage.dispatchId,
+      earlierNextStage.stageAttemptId,
+    );
+    localState.execute(recordActivity(earlierDegraded.run, "c1", "Discovery action"));
+    localState.execute(recordActivity(earlierSecondRun, "d1", "Plan action"));
+    localState.execute(markDegraded(earlierDegraded.run.agentRunId, "mark-degraded-earlier-p1"));
+    expect(readWorkItemActivity(localState, earlierDegraded.workItemId).degraded).toBe(true);
+
+    const laterDegraded = startWorkItemExecution(localState, "p2");
+    const laterNextStage = advanceToNextStage(
+      localState,
+      "p2",
+      laterDegraded.dispatchId,
+      laterDegraded.run,
+      laterDegraded.workItemId,
+    );
+    const laterSecondRun = startAgentRunAndSession(
+      localState,
+      "p2",
+      "plan",
+      laterNextStage.dispatchId,
+      laterNextStage.stageAttemptId,
+    );
+    localState.execute(recordActivity(laterDegraded.run, "c1", "Discovery action"));
+    localState.execute(recordActivity(laterSecondRun, "d1", "Plan action"));
+    localState.execute(markDegraded(laterSecondRun.agentRunId, "mark-degraded-later-p2"));
+    expect(readWorkItemActivity(localState, laterDegraded.workItemId).degraded).toBe(true);
+  });
+
+  // Fix round 1: the aggregation query's own `WHERE agent_runs.work_item_id = ?` had zero
+  // coverage -- every prior test in this suite that checks `omittedCount`/`degraded` only ever
+  // opens ONE WorkItem whose runs have those values, so a mutation that folds every WorkItem's
+  // runs into the aggregate (`... OR 1 = 1`) produced the exact same result and every test still
+  // passed. This test opens two WorkItems and gives the noisy one nonzero contributions on both
+  // axes specifically so a leaked aggregation is visible on the quiet one.
+  it("does not leak another task's aggregation into this task's omittedCount and degraded", async () => {
+    const localState = await open();
+    const quiet = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(quiet.run, "c1", "Quiet task action"));
+
+    const noisy = startWorkItemExecution(localState, "p2");
+    for (let index = 0; index < 1_001; index += 1) {
+      localState.execute(recordActivity(noisy.run, `n${index.toString()}`, "Noisy repeated action"));
+    }
+    localState.execute(markDegraded(noisy.run.agentRunId, "mark-degraded-noisy-p2"));
+
+    const quietPage = readWorkItemActivity(localState, quiet.workItemId);
+    expect(quietPage.omittedCount).toBe(0);
+    expect(quietPage.degraded).toBe(false);
+
+    const noisyPage = readWorkItemActivity(localState, noisy.workItemId, 2_000);
+    expect(noisyPage.omittedCount).toBe(1);
+    expect(noisyPage.degraded).toBe(true);
+  });
+
+  it("collects the work item's audited workspace tool calls across runs, ordered", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(startWorkspaceToolCall(execution.run, "a".repeat(64), "READ_FILE", "src/a.ts"));
+
+    const nextStage = advanceToNextStage(
+      localState,
+      "p1",
+      execution.dispatchId,
+      execution.run,
+      execution.workItemId,
+    );
+    const secondRun = startAgentRunAndSession(
+      localState,
+      "p1",
+      "plan",
+      nextStage.dispatchId,
+      nextStage.stageAttemptId,
+    );
+    localState.execute(startWorkspaceToolCall(secondRun, "b".repeat(64), "WRITE_FILE", "src/b.ts"));
+
+    const result = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: execution.workItemId,
+    });
+    if (result.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    expect(result.calls.map((call) => call.agentRunId)).toEqual([
+      execution.run.agentRunId,
+      secondRun.agentRunId,
+    ]);
+    expect(result.calls.map((call) => call.operation)).toEqual(["READ_FILE", "WRITE_FILE"]);
+  });
+
+  it("excludes another task's audited workspace tool calls", async () => {
+    const localState = await open();
+    const first = startWorkItemExecution(localState, "p1");
+    const second = startWorkItemExecution(localState, "p2");
+    localState.execute(startWorkspaceToolCall(first.run, "a".repeat(64), "READ_FILE", "src/a.ts"));
+    localState.execute(startWorkspaceToolCall(second.run, "b".repeat(64), "WRITE_FILE", "src/b.ts"));
+
+    const result = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: first.workItemId,
+    });
+    if (result.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0]).toMatchObject({ agentRunId: first.run.agentRunId, operation: "READ_FILE" });
+  });
+
+  // Fix round 1 (Task 2): both work-item-scoped reads gained `after`/`limit` so the daemon route can
+  // fetch roughly one page at a time instead of the WorkItem's entire history -- a flat 2_000-row
+  // constant no longer bounds a WorkItem with several runs. `after` filters `observed_at >= ?`
+  // (deliberately inclusive of the boundary row, not `>`) because the daemon's own cursor logic
+  // needs to see the boundary row again to confirm it was not pruned -- see the query's own comment.
+  it("LIST_WORK_ITEM_ACTIVITY's `after` returns only rows observed at or after that timestamp, boundary included", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(execution.run, "c1", "First"));
+    localState.execute(recordActivity(execution.run, "c2", "Second"));
+    localState.execute(recordActivity(execution.run, "c3", "Third"));
+
+    const full = readWorkItemActivity(localState, execution.workItemId);
+    const boundary = full.entries[1];
+    if (!boundary) throw new Error("Expected a second entry to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORK_ITEM_ACTIVITY",
+      workItemId: execution.workItemId,
+      after: boundary.observedAt,
+      limit: 200,
+    });
+    if (page.type !== "WORK_ITEM_ACTIVITY") throw new Error("Expected a work item activity page");
+    // Inclusive: the boundary row ("Second") itself is still present, alongside everything after it.
+    expect(page.entries.map((entry) => entry.label)).toEqual(["Second", "Third"]);
+  });
+
+  it("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM's `after` returns only rows started at or after that timestamp, boundary included", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(startWorkspaceToolCall(execution.run, "a".repeat(64), "READ_FILE", "src/a.ts"));
+    localState.execute(startWorkspaceToolCall(execution.run, "b".repeat(64), "WRITE_FILE", "src/b.ts"));
+    localState.execute(startWorkspaceToolCall(execution.run, "c".repeat(64), "DELETE_FILE", "src/c.ts"));
+
+    const full = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: execution.workItemId,
+    });
+    if (full.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    const boundary = full.calls[1];
+    if (!boundary) throw new Error("Expected a second call to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: execution.workItemId,
+      after: boundary.startedAt,
+      limit: 200,
+    });
+    if (page.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    expect(page.calls.map((call) => call.operation)).toEqual(["WRITE_FILE", "DELETE_FILE"]);
+  });
+
+  it("bounds LIST_WORK_ITEM_ACTIVITY's read by `limit` even when `after` is given", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    for (let index = 0; index < 5; index += 1) {
+      localState.execute(recordActivity(execution.run, `c${index.toString()}`, `Entry ${index.toString()}`));
+    }
+    const full = readWorkItemActivity(localState, execution.workItemId);
+    // Anchored on the THIRD entry, not the first: if `after` were silently ignored, this would read
+    // back the WorkItem's first two entries instead -- a different, wrong answer the test can catch.
+    // Anchoring on the first entry cannot tell "after honoured" apart from "after ignored", because
+    // both start the read at the very beginning.
+    const boundary = full.entries[2];
+    if (!boundary) throw new Error("Expected a third entry to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORK_ITEM_ACTIVITY",
+      workItemId: execution.workItemId,
+      after: boundary.observedAt,
+      limit: 2,
+    });
+    if (page.type !== "WORK_ITEM_ACTIVITY") throw new Error("Expected a work item activity page");
+    expect(page.entries).toHaveLength(2);
+    expect(page.entries.map((entry) => entry.label)).toEqual(["Entry 2", "Entry 3"]);
+  });
+
+  // Fix round 1 (Task 2): GET_STAGE_ATTEMPT resolves one StageAttempt directly by id -- unlike
+  // GET_WORKFLOW_SNAPSHOT's `stageAttempts`, which only ever covers a WorkItem's *latest* pipeline
+  // run, this is what the daemon route now uses so an AgentRun from an earlier, already-finished
+  // pipeline run still resolves. Deliberately not exercised through `startWorkItemExecution`'s
+  // two-pipeline-run machinery here -- that scenario belongs to the daemon-level HTTP test
+  // (work-item-activity-http.integration.test.ts), which proves the route's own use of this query
+  // survives it end to end. This is the query's own minimal, direct proof.
+  it("GET_STAGE_ATTEMPT resolves a StageAttempt directly by id", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId: execution.stageAttemptId });
+    if (result.type !== "STAGE_ATTEMPT") throw new Error("Expected a StageAttempt result");
+    expect(result.stageAttempt?.id).toBe(execution.stageAttemptId);
+    expect(result.stageAttempt?.stage).toBe("DISCOVERY");
+  });
+
+  it("GET_STAGE_ATTEMPT reads back null for a StageAttempt id nothing seeded", async () => {
+    const localState = await open();
+    const result = localState.query({
+      type: "GET_STAGE_ATTEMPT",
+      stageAttemptId: "stage-attempt-does-not-exist",
+    });
+    if (result.type !== "STAGE_ATTEMPT") throw new Error("Expected a StageAttempt result");
+    expect(result.stageAttempt).toBeNull();
+  });
+});

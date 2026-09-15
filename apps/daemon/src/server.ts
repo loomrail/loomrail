@@ -49,7 +49,6 @@ import {
   launchEvidencePackageResponseSchema,
   launchReleaseProjectResponseSchema,
   guidedDeploymentProjectResponseSchema,
-  liveProviderIdSchema,
   saveLaunchEnvironmentRequestSchema,
   mcpProfilesResponseSchema,
   mcpProfileProposalSchema,
@@ -131,6 +130,7 @@ import {
   type ScaffoldOperationErrorCode,
   type WorkflowStage,
   type WorkItemWorkspace,
+  type WorkspaceToolCallRecord,
 } from "@loomrail/contracts";
 import {
   adapterWorksInWorkspace,
@@ -168,6 +168,7 @@ import {
   StateStoreError,
   type OrphanProcessEvent,
   type OrphanWorkspaceEvent,
+  type WorkItemActivityRow,
 } from "@loomrail/persistence-sqlite";
 import {
   constitutionPresets,
@@ -210,11 +211,15 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import {
+  activitySourceFetchLimit,
   buildAgentRunActivityPage,
   decodeCursor,
   resolveAuditedCallsForRead,
-  REPORTED_ENTRIES_FETCH_LIMIT,
+  resolveReferencedRuns,
+  MAX_ACTIVITY_PAGE_SIZE,
   type ActivityCursor,
+  type BuiltActivityPage,
+  type RunLookup,
 } from "./agent-run-activity.js";
 import { cleanupExpiredAgentRunActivity } from "./agent-run-activity-retention.js";
 import { broadcastingState } from "./broadcasting-state.js";
@@ -442,10 +447,9 @@ const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
 const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
-const agentRunActivityParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 // Opaque per Task 8's contract: this daemon never inspects `after` beyond handing it to
 // `decodeCursor`, so the only runtime shape worth asserting here is "a non-empty string, if present".
-const agentRunActivityQuerySchema = z.object({ after: z.string().min(1).max(1_000).optional() }).strict();
+const workItemActivityQuerySchema = z.object({ after: z.string().min(1).max(1_000).optional() }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
@@ -3404,26 +3408,26 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     });
 
     // Merges `workspace_tool_calls` (daemon-audited) with `agent_run_activity` (provider-reported)
-    // into one chronological feed on read -- see apps/daemon/src/agent-run-activity.ts. Mirrors the
-    // verification-checks/output route directly above: `requireSession`, `requestCorrelationId`,
-    // `cache-control: no-store` and `x-content-type-options: nosniff` on a bounded, redacted body.
+    // into one chronological feed on read, scoped to the WorkItem rather than one AgentRun (spec 128
+    // / ADR-0034) -- see apps/daemon/src/agent-run-activity.ts. Mirrors the verification-checks/output
+    // route above: `requireSession`, `requestCorrelationId`, `cache-control: no-store` and
+    // `x-content-type-options: nosniff` on a bounded, redacted body.
     //
     // No project-scoped ACL exists anywhere in this daemon (`requireSession` is the whole of it --
-    // one local owner, one session), so "a run the caller cannot see" is enforced the same way every
-    // other :id-scoped route here enforces it: the AgentRun either exists or this answers 404, same
-    // as GET_WORK_ITEM/GET_AGENT_RUN elsewhere never leak which opaque ids are real.
-    app.get("/api/v1/agent-runs/:runId/activity", (request, reply) => {
+    // one local owner, one session), so "a WorkItem the caller cannot see" is enforced the same way
+    // every other :id-scoped route here enforces it: the WorkItem either exists or this answers 404,
+    // same as every other work-item-scoped route (`WorkItemDomainError("WORK_ITEM_NOT_FOUND", ...)`,
+    // mapped to 404 by `sendOperationError`) rather than the bespoke inline 404 the AgentRun-scoped
+    // route this replaces used to send.
+    app.get("/api/v1/work-items/:workItemId/activity", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
       try {
-        const params = agentRunActivityParamsSchema.parse(request.params);
-        const query = agentRunActivityQuerySchema.parse(request.query);
-        const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId: params.runId });
-        const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
-        if (agentRun === undefined) {
-          return reply
-            .code(404)
-            .send(createError("AGENT_RUN_NOT_FOUND", "The AgentRun does not exist", correlationId));
+        const params = workItemParamsSchema.parse(request.params);
+        const query = workItemActivityQuerySchema.parse(request.query);
+        const workItemResult = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItemResult.type !== "WORK_ITEM" || workItemResult.workItem === null) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
         }
         // A cursor is client-supplied input like any other (Task 8): `undefined` means the first
         // page, but a present-and-unparseable one is refused outright rather than silently treated
@@ -3438,48 +3442,145 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               .send(createError("INVALID_ACTIVITY_CURSOR", "The activity cursor is invalid", correlationId));
           }
         }
-        const reportedResult = localState.query({
-          type: "LIST_AGENT_RUN_ACTIVITY",
-          agentRunId: params.runId,
-          limit: REPORTED_ENTRIES_FETCH_LIMIT,
-        });
-        if (reportedResult.type !== "AGENT_RUN_ACTIVITY") {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "The reported activity buffer could not be loaded",
+        // Fix round 1 (Task 2): both source reads are now bounded to roughly one page's worth via
+        // SQL `after` (the cursor's own timestamp), not the WorkItem's entire history -- a WorkItem
+        // with several busy runs is no longer read in full on every page. `fetchWindow(undefined)`
+        // reads from the true start; `fetchWindow(cursor.at)` reads from the cursor's timestamp
+        // onward (a superset of "strictly after", by design -- see the query's own comment in
+        // packages/persistence-sqlite/src/index.ts), which is what lets `buildAgentRunActivityPage`'s
+        // existing `locateCursor` still find the cursor's own row and confirm it was not pruned.
+        //
+        // The per-source limit is `activitySourceFetchLimit(pageSize)`, not `pageSize + 1`: the
+        // window includes the cursor's own row, which is then dropped, so a read-ahead of one row
+        // left nothing to prove a next page with once the cursor was consumed (see that function's
+        // own comment for the 400-entry collapse this fixes).
+        const activityPageSize = MAX_ACTIVITY_PAGE_SIZE;
+        const activitySourceLimit = activitySourceFetchLimit(activityPageSize);
+        const fetchWindow = (
+          after: string | undefined,
+        ): {
+          reported: WorkItemActivityRow[];
+          audited: WorkspaceToolCallRecord[];
+          omittedCount: number;
+          degraded: boolean;
+        } => {
+          // `exactOptionalPropertyTypes` refuses `after: undefined` against an optional field, so an
+          // absent cursor omits the key entirely rather than passing it through as `undefined`.
+          const afterField = after === undefined ? {} : { after };
+          const reportedResult = localState.query({
+            type: "LIST_WORK_ITEM_ACTIVITY",
+            workItemId: params.workItemId,
+            ...afterField,
+            limit: activitySourceLimit,
+          });
+          if (reportedResult.type !== "WORK_ITEM_ACTIVITY") {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The reported activity buffer could not be loaded",
+            );
+          }
+          const auditedResult = localState.query({
+            type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+            workItemId: params.workItemId,
+            ...afterField,
+            limit: activitySourceLimit,
+          });
+          if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The audited workspace tool calls could not be loaded",
+            );
+          }
+          return {
+            reported: reportedResult.entries,
+            audited: auditedResult.calls,
+            omittedCount: reportedResult.omittedCount,
+            degraded: reportedResult.degraded,
+          };
+        };
+
+        // Every AgentRun either source in `window` names, resolved once: audited rows carry no
+        // provider of their own (ADR-0014), and neither source carries `stage`. Resolved through
+        // GET_STAGE_ATTEMPT directly on the AgentRun's own `stageAttemptId` -- NOT through
+        // GET_WORKFLOW_SNAPSHOT, whose `stageAttempts` are scoped to the WorkItem's *latest*
+        // `pipeline_runs` row only. A WorkItem can accumulate more than one pipeline run over its
+        // life (`decideStartPipeline` in packages/domain/src/workflow.ts blocks a second START while
+        // one is active, not once one has finished), so an AgentRun from an earlier, already-finished
+        // pipeline run would not be found in the snapshot even though its entries are still very much
+        // live in both source tables here -- exactly the WorkItem this whole rescoping exists to keep
+        // visible. The resolution itself (fix round 2) lives in `resolveReferencedRuns`
+        // (agent-run-activity.ts), not inline here, so its "stage genuinely cannot be resolved"
+        // fallback is testable with plain lookup stubs instead of a corrupted database; `runLookup`
+        // below is the thin, impure adapter onto `localState.query` that function needs.
+        const runLookup: RunLookup = {
+          getAgentRun: (agentRunId) => {
+            const result = localState.query({ type: "GET_AGENT_RUN", agentRunId });
+            const run = result.type === "AGENT_RUNS" ? result.runs[0] : undefined;
+            return run === undefined
+              ? undefined
+              : { stageAttemptId: run.stageAttemptId, provider: run.provider };
+          },
+          getStageAttempt: (stageAttemptId) => {
+            const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId });
+            return result.type === "STAGE_ATTEMPT" && result.stageAttempt !== null
+              ? { stage: result.stageAttempt.stage }
+              : undefined;
+          },
+        };
+
+        const buildFromWindow = (
+          window: ReturnType<typeof fetchWindow>,
+          cursorForBuild: ActivityCursor | null,
+        ): BuiltActivityPage => {
+          const referencedRunIds = Array.from(
+            new Set<string>([
+              ...window.audited.map((call) => call.agentRunId),
+              ...window.reported.map((entry) => entry.agentRunId),
+            ]),
           );
+          // A run whose stage still cannot be resolved (`unresolvedRunIds`) is dropped from this
+          // page's entries and flags `degraded`, the same graceful answer `resolveAuditedCallsForRead`
+          // below already gives a MOCK run's orphaned audited calls, rather than 500ing the whole page
+          // over one run out of the WorkItem's many.
+          const { runs, unresolvedRunIds } = resolveReferencedRuns(referencedRunIds, runLookup);
+          const auditedCalls = window.audited.filter((call) => !unresolvedRunIds.has(call.agentRunId));
+          const reportedRows = window.reported.filter((entry) => !unresolvedRunIds.has(entry.agentRunId));
+          // A MOCK run that somehow does have audited rows (historical data predating the
+          // provider/audited-calls invariant, or a fixture) would otherwise reach
+          // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first
+          // so the read degrades instead of failing outright.
+          const resolvedAudited = resolveAuditedCallsForRead(auditedCalls, runs);
+          return buildAgentRunActivityPage({
+            auditedCalls: resolvedAudited.auditedCalls,
+            reportedRows,
+            runs,
+            omittedCount: window.omittedCount,
+            degraded: window.degraded || resolvedAudited.degraded || unresolvedRunIds.size > 0,
+            cursor: cursorForBuild,
+            pageSize: activityPageSize,
+          });
+        };
+
+        const built = buildFromWindow(fetchWindow(cursor === null ? undefined : cursor.at), cursor);
+        let page = built.page;
+        // Rewinds on `cursorLost`, NOT on `page.gap`. The bounded fetch above is a superset of
+        // "strictly after the cursor", never a strict subset (see fetchWindow's own comment), so
+        // `cursorLost` means the cursor's row genuinely is not in this WorkItem's held data --
+        // pruned by reported-side eviction, or a cursor that never named a real position. Either
+        // way, the correct recovery is the same "restart from the true beginning" the pre-fix
+        // single-run design always gave a gap: refetch unfiltered. (This is the one case where the
+        // AUDITED source's own `after` bound could have hidden genuinely-live history:
+        // `workspace_tool_calls` never evicts, so an audited entry older than an evicted REPORTED
+        // cursor is still valid and belongs on a gap-restarted page.)
+        //
+        // `page.gap` is the wider warning shown to the owner and covers a second cause -- a source
+        // that came back at its read-ahead cap on a page that still ended without a `nextCursor`.
+        // That page's cursor was found; rewinding it would re-serve the feed's first entries under a
+        // cursor the client keeps paging from, which is the loop this branch used to create.
+        if (cursor !== null && built.cursorLost) {
+          const rebuilt = buildFromWindow(fetchWindow(undefined), null);
+          page = { ...rebuilt.page, gap: true };
         }
-        const auditedResult = localState.query({
-          type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN",
-          agentRunId: params.runId,
-        });
-        if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "The audited workspace tool calls could not be loaded",
-          );
-        }
-        // Audited rows carry no provider column of their own (ADR-0014); the AgentRun they belong to
-        // has exactly one provider for its whole lifetime, so that is the source of truth. `null` for
-        // MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures, just not one the
-        // activity feed was ever built to carry (`buildAgentRunActivityPage` treats it as "no audited
-        // entries possible", not as a request to fail -- as long as there are none to map; see the
-        // resolve step below for when there are).
-        const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
-        const resolvedProvider = runProvider.success ? runProvider.data : null;
-        // A MOCK AgentRun that somehow does have audited rows (historical data predating the
-        // provider/audited-calls invariant, or a fixture) would otherwise reach
-        // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first so
-        // the read degrades instead of failing outright.
-        const resolvedAudited = resolveAuditedCallsForRead(auditedResult.calls, resolvedProvider);
-        const page = buildAgentRunActivityPage({
-          auditedCalls: resolvedAudited.auditedCalls,
-          provider: resolvedProvider,
-          reportedRows: reportedResult.entries,
-          omittedCount: reportedResult.omittedCount,
-          degraded: reportedResult.degraded || resolvedAudited.degraded,
-          cursor,
-        });
         return reply
           .header("cache-control", "no-store")
           .header("x-content-type-options", "nosniff")

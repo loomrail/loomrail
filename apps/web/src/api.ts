@@ -924,17 +924,21 @@ export const getAttentionInbox = async () =>
 export const getAgentFleet = async () => requestLocalApi("/api/v1/agent-fleet", agentFleetResponseSchema);
 
 /**
- * One page of a single AgentRun's Run Activity feed (Task 8's merge of `DAEMON_AUDITED` workspace
- * tool calls with the provider's own `PROVIDER_REPORTED` account), served oldest first.
+ * One page of a WorkItem's merged Run Activity feed (spec 128 / ADR-0034: `DAEMON_AUDITED`
+ * workspace tool calls merged with each run's own `PROVIDER_REPORTED` account), served oldest
+ * first and spanning every AgentRun the task has produced, not one run's own attempt.
  *
  * `after` is the opaque cursor the daemon handed back as `nextCursor` on a previous page -- never
- * constructed by this client. Omitting it reads from the start of the run's story, matching
+ * constructed by this client. Omitting it reads from the start of the task's story, matching
  * `listWorkItemEvents`'s own `before`-less first page above.
+ *
+ * Replaces the deleted `GET /api/v1/agent-runs/:runId/activity` (Task 1/2): that route is gone
+ * from the daemon entirely, so this is the only way this client reads Run Activity now.
  */
-export const getAgentRunActivity = async (agentRunId: string, after?: string) => {
+export const getWorkItemActivity = async (workItemId: string, after?: string) => {
   const query = after === undefined ? "" : `?after=${encodeURIComponent(after)}`;
   return requestLocalApi(
-    `/api/v1/agent-runs/${encodeURIComponent(agentRunId)}/activity${query}`,
+    `/api/v1/work-items/${encodeURIComponent(workItemId)}/activity${query}`,
     agentRunActivityPageSchema,
   );
 };

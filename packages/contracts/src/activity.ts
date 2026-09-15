@@ -8,6 +8,7 @@ import {
   schemaVersionSchema,
   utcTimestampSchema,
 } from "./shared.js";
+import { workflowStageSchema } from "./workflow.js";
 import { workspaceToolFailureCodeSchema } from "./workspace-tool.js";
 
 /**
@@ -65,8 +66,9 @@ export type ActivityOrigin = z.infer<typeof activityOriginSchema>;
 export const agentRunActivityEntrySchema = z
   .object({
     // The only identity that holds across the merged feed. `seq` below does not: it is monotonic
-    // per *origin*, not across the page, so two entries from different sources legitimately share a
-    // `seq` value. The cursor is `(at, origin, id)` for the same reason -- never `seq` alone.
+    // per *origin* within one *run*, not across the page, so two entries from different sources --
+    // or from two different runs of the same source -- legitimately share a `seq` value. The cursor
+    // is `(at, origin, id)` for the same reason -- never `seq` alone.
     id: z.string().min(1),
     // Monotonic within a run's own source but NOT dense: eviction leaves gaps on the reported side,
     // and a reader that treats a missing number as a defect would report every long run as broken.
@@ -87,6 +89,19 @@ export const agentRunActivityEntrySchema = z
     // DAEMON_AUDITED entry that did not fail.
     failureCode: workspaceToolFailureCodeSchema.nullable(),
     truncated: z.boolean(),
+    // Which run produced this entry. The feed spans a WorkItem's runs, so the reader groups by
+    // this and names the group with `stage`; without it a reader cannot tell one run's actions
+    // from the next run's, and the two can be minutes apart or days.
+    agentRunId: z.string().min(1),
+    stage: workflowStageSchema,
+    // No run NUMBER travels with the entry, deliberately. An earlier cut carried
+    // `agent_runs.ordinal` so a reader could head each group "Run N", on the premise that the
+    // number distinguishes two adjacent groups of the same stage. It does not: `agent_runs.ordinal`
+    // is `UNIQUE (stage_attempt_id, ordinal)`, so a stage RETRY opens a new StageAttempt whose first
+    // AgentRun is ordinal 1 again -- two adjacent groups for two attempts of the same stage would
+    // both read "Run 1", which is the very indistinguishability the number was added to prevent. A
+    // number that repeats across different runs is worse than none, and the groups are already
+    // ordered by their entries' own timestamps, so the heading carries `stage` alone.
   })
   .strict();
 
@@ -100,8 +115,13 @@ export const agentRunActivityPageSchema = z
     nextCursor: z.string().min(1).nullable(),
     omittedCount: z.number().int().nonnegative(),
     degraded: z.boolean(),
-    // True when the cursor named a pruned position and the page restarts from the oldest entry
-    // still held, so the client can say so instead of showing a silent hole.
+    // "This page may be incomplete", from either of two causes the client cannot tell apart and
+    // does not need to: the cursor named a position no longer held, so the page restarted from the
+    // oldest entry still there; or a source returned its entire read-ahead and the page still ended
+    // with no `nextCursor`, where "nothing more" is a claim the read cannot support. Either way the
+    // client says the list may be incomplete instead of showing a silent hole. Never set on a first
+    // page: with no cursor the page starts at index 0, so a source big enough to trip the second
+    // cause always leaves more rows than fit and `nextCursor` is non-null.
     gap: z.boolean(),
   })
   .strict();

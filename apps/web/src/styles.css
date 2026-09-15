@@ -3821,6 +3821,32 @@ body.is-resizing {
   padding: 0;
 }
 
+/* One run's consecutive entries (spec 128: grouped by run, each group named by its own stage). The
+   heading is plain text, not a coloured or uppercase "eyebrow" label -- the same semantic tokens as
+   everywhere else in this file, so it reads correctly in both themes without a colour-only cue. */
+.run-activity__group {
+  display: grid;
+  gap: var(--lr-space-2);
+}
+
+.run-activity__group-heading {
+  align-items: baseline;
+  color: var(--lr-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--lr-font-xs);
+  font-weight: var(--lr-weight-medium);
+  gap: var(--lr-space-2);
+}
+
+.run-activity__group-entries {
+  display: grid;
+  gap: var(--lr-space-2-5);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 .run-activity__entry {
   display: grid;
   gap: var(--lr-space-1);

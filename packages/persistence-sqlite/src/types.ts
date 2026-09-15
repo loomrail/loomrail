@@ -46,6 +46,7 @@ import type {
   ProviderUsageReport,
   ScaffoldOperation,
   SquadAssignment,
+  StageAttempt,
   StateCommand,
   StateCommandResult,
   WorkItem,
@@ -178,6 +179,31 @@ export type AgentRunActivityRow = {
 };
 
 /**
+ * One row of the prunable `agent_run_activity` buffer, work-item-scoped (Task 1): the feed's unit
+ * moves from AgentRun to WorkItem, so unlike `AgentRunActivityRow` above -- which reads one run and
+ * therefore never needs to say which run a row came from -- this must carry `agentRunId` on every
+ * row, so the reader can group entries by run and name each group with that run's stage.
+ *
+ * `stage` itself is NOT read here, on purpose: `agent_run_activity` carries no such column, and
+ * resolving it would mean joining through `agent_runs` -> `stage_attempts` for every row -- exactly
+ * the join this task's own boundary forbids (both source tables already carry `work_item_id`, so
+ * filtering by WorkItem needs none). A later task, which already loads the WorkItem's AgentRuns to
+ * build the merged feed, resolves `stage` there instead of duplicating that lookup per row here.
+ */
+export type WorkItemActivityRow = {
+  id: string;
+  seq: number;
+  agentRunId: string;
+  observedAt: string;
+  provider: LiveProviderId;
+  kind: ProviderActivityEntry["kind"];
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+  truncated: boolean;
+};
+
+/**
  * The newest Run Activity entry for one AgentRun, resolved across BOTH sources -- daemon-audited
  * `workspace_tool_calls` and provider-reported `agent_run_activity` -- by the same rule the merged
  * feed itself orders by (Task 8's `mergeRunActivity`: time first, then origin, then id), so this and
@@ -248,10 +274,19 @@ export type StateQuery =
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_WORKSPACE_TOOL_CALLS"; providerSessionId: string }
-  // Task 8's merge reads the audited side of the feed straight off `agent_run_id`, the column
-  // `workspace_tool_calls` already carries -- not by resolving a ProviderSession first, which would
-  // assume one session per AgentRun instead of just asking the table for what it already knows.
-  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"; agentRunId: string }
+  // Task 1's work-item-scoped sibling: the WorkItem-spanning Run Activity feed groups entries by
+  // run, so it needs every run's audited calls, not one run's. `workspace_tool_calls` already
+  // carries `work_item_id` as its own column (migration 0055), so this filters on it directly --
+  // no join through `agent_runs` to reach it.
+  //
+  // Fix round 1 (Task 2): `after`/`limit` bound this to roughly one page's worth of rows instead of
+  // the WorkItem's entire audited history. `after` is a raw `observed_at`-comparable timestamp
+  // (`started_at >= after`), not the full `(at, origin, id)` cursor triple -- the daemon-side caller
+  // (apps/daemon/src/agent-run-activity.ts) locates the exact cursor position and detects eviction
+  // gaps in memory over this now-bounded read, the same way it always did over the previously
+  // unbounded one; this query's only job is to keep the read itself from growing with the WorkItem's
+  // total run count. Omitting `after` reads from the very start, same as before.
+  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"; workItemId: string; after?: string; limit?: number }
   | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
@@ -270,6 +305,14 @@ export type StateQuery =
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
   | { type: "GET_AGENT_RUN"; agentRunId: string }
+  // Fix round 1 (Task 2): resolves one StageAttempt directly by id, unlike `GET_WORKFLOW_SNAPSHOT`
+  // above, whose `stageAttempts` array is scoped to a WorkItem's *latest* `pipeline_runs` row only.
+  // An AgentRun's own `stageAttemptId` can name an attempt from an *earlier* pipeline run -- the
+  // domain layer allows a WorkItem to start a new pipeline once its previous one is no longer active
+  // (`decideStartPipeline` in packages/domain/src/workflow.ts only blocks an *active* run, not a
+  // finished one) -- so the activity route resolves each referenced AgentRun's stage through this,
+  // not through the snapshot, to stay correct across that boundary.
+  | { type: "GET_STAGE_ATTEMPT"; stageAttemptId: string }
   | {
       // Raw read of the prunable `agent_run_activity` buffer for one AgentRun (Task 6). Task 8's
       // merged feed layers `origin` and cross-source pagination on top of this; this query only
@@ -279,10 +322,27 @@ export type StateQuery =
       limit?: number;
     }
   | {
+      // Task 1's work-item-scoped sibling of LIST_AGENT_RUN_ACTIVITY above: the feed's unit moves
+      // from AgentRun to WorkItem (spec 128), so this reads every one of the WorkItem's runs'
+      // `agent_run_activity` rows in one query -- `agent_run_activity` already carries `work_item_id`
+      // as its own column (migration 0062), so this filters on it directly, no join. `omittedCount`
+      // and `degraded` are aggregated across the WorkItem's runs (summed, and true if any run
+      // degraded) rather than read per-run, since a WorkItem-spanning feed has no single run to read
+      // them from.
+      type: "LIST_WORK_ITEM_ACTIVITY";
+      workItemId: string;
+      // Fix round 1 (Task 2): `after` bounds this the same way it now bounds
+      // LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM above -- see that query's own comment. `limit` is no
+      // longer read as "comfortably above one run's cap" (a WorkItem's total rows across its runs is
+      // NOT bounded by any one run's own 1_000-row eviction cap, so that reasoning never actually
+      // held once the feed spans several runs); the caller now passes roughly one page's worth.
+      after?: string;
+      limit?: number;
+    }
+  | {
       // Task 10's shared "what is it doing right now" read: the newest entry across BOTH Run
       // Activity sources, for each of the given AgentRuns, in one query -- a newest-first sibling
-      // of LIST_AGENT_RUN_ACTIVITY and LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN above, which both
-      // read one run's full ascending history. A run with no entries in either source is simply
+      // of LIST_AGENT_RUN_ACTIVITY above, which reads one run's full ascending history. A run with no entries in either source is simply
       // absent from the result, not present with a null -- see LatestAgentRunActivityEntry.
       type: "LIST_LATEST_AGENT_RUN_ACTIVITY";
       agentRunIds: readonly string[];
@@ -447,9 +507,19 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | { type: "STAGE_ATTEMPT"; stageAttempt: StageAttempt | null }
   | {
       type: "AGENT_RUN_ACTIVITY";
       entries: AgentRunActivityRow[];
+      omittedCount: number;
+      degraded: boolean;
+    }
+  | {
+      // Task 1's work-item-scoped sibling of AGENT_RUN_ACTIVITY above (LIST_WORK_ITEM_ACTIVITY's
+      // result). `omittedCount`/`degraded` are already aggregated across the WorkItem's runs when
+      // this arrives -- summed and OR'd in SQL, not left for the caller to reduce.
+      type: "WORK_ITEM_ACTIVITY";
+      entries: WorkItemActivityRow[];
       omittedCount: number;
       degraded: boolean;
     }

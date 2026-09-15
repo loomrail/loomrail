@@ -2492,19 +2492,24 @@ Required controls:
 - **Untrusted text stays inert.** Provider `label`/`detail`/`status` are rendered as React text nodes, never as
   Markdown, HTML or links, in both the Cockpit section and the Fleet column; only the closed
   `workspaceTool.*` codes of audited rows are used as translation keys.
-- **Bounded surface and inputs.** `GET /api/v1/agent-runs/:runId/activity` is `requireSession`-gated on the
-  loopback daemon, scoped by AgentRun existence, and answers `cache-control: no-store` plus
+- **Bounded surface and inputs.** `GET /api/v1/work-items/:workItemId/activity` is `requireSession`-gated on
+  the loopback daemon, scoped by WorkItem existence (spec 128 replaced the AgentRun-scoped route this feed
+  first shipped with, and deleted it), and answers `cache-control: no-store` plus
   `x-content-type-options: nosniff` with at most 200 entries. The cursor is opaque and re-parsed through a strict
-  schema; a forged or malformed one is refused, never used as a query parameter, and a cursor naming a pruned
-  position restarts the page with an explicit `gap`. Recording is guarded by a SYSTEM/session-loop actor check.
+  schema; a forged or malformed one is refused outright rather than interpolated anywhere, and a cursor naming
+  a pruned position restarts the page with an explicit `gap`. A source that comes back at its read-ahead cap on
+  a page that still ends without a next cursor sets `gap` too, so `gap` means "this page may be incomplete",
+  not specifically "something was pruned"; only the pruned-cursor case restarts the page. A cursor that does parse contributes only its own timestamp, and only as a bound SQL
+  parameter. Recording is guarded by a SYSTEM/session-loop actor check.
 - **Bounded growth and honest loss.** At most 1,000 entries are kept per run, oldest evicted, with the dropped
   count shown. The in-memory queue is capped at 500 and writes happen off the provider's stdout path, so a chatty
   provider cannot exhaust the daemon; the event-channel frame is unchanged and its signal is debounced.
 - **Failure cannot reach the run.** `onActivity` runs inside the guarded stdout listener, where a throw would
   stop the child and fail the session, so it validates, redacts and enqueues only, with every throwing call —
-  the logger included — inside a further guard. Any loss sets a per-run `degraded` flag written by its own
-  transaction, and startup reconciliation marks every interrupted AgentRun degraded because its queue died with
-  the process.
+  the logger included — inside a further guard. A recorder failure — a full queue, a failed write, a throw from
+  the recorder itself — sets a per-run `degraded` flag written by its own transaction, and startup
+  reconciliation marks every interrupted AgentRun degraded because its queue died with the process. Not every
+  loss sets it; the residual risk below says which do not.
 
 Required verification, all present:
 
@@ -2548,8 +2553,9 @@ Required verification, all present:
 
 Residual risk: the feed is untrusted text the owner reads, and a provider can fill it with plausible but false
 claims about its own work; it is labelled as such and proves nothing. It is also incomplete by construction —
-eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and only the
-first three of those set `degraded`. Every recorded entry costs one row in the append-only `commands` receipt
+eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and of those
+only the bounded queue sets `degraded`: eviction is surfaced separately as the run's `omittedCount`, while a
+contract-invalid entry and an entry reported after the session closed are dropped without setting either. Every recorded entry costs one row in the append-only `commands` receipt
 table, which has no retention. The activity table itself is now aged out by `cleanupExpiredAgentRunActivity`
 (`apps/daemon/src/agent-run-activity-retention.ts`, SD-004): at daemon startup, `agent_run_activity` rows — and
 the `agent_run_activity_state` counters row a run's last entry leaves behind — are deleted once their AgentRun's
