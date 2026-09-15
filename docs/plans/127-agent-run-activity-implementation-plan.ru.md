@@ -434,7 +434,9 @@ describe("boundActivityText", () => {
 
   it("does not split a surrogate pair", () => {
     const result = boundActivityText("😀".repeat(400), 500);
-    expect(result.text === null || Array.from(result.text).every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(true);
+    expect(result.text === null || Array.from(result.text).every((ch) => ch.codePointAt(0) !== 0xfffd)).toBe(
+      true,
+    );
   });
 });
 ```
@@ -1092,35 +1094,35 @@ hot path. Spec §Надёжность requires exactly this shape.
 принудительно при завершении сессии, чтобы хвост очереди не потерялся:
 
 ```ts
-      const drainActivityQueue = (): void => {
-        const pending = live.activityQueue.splice(0, live.activityQueue.length);
-        for (const entry of pending) {
-          try {
-            deps.state.execute({
-              schemaVersion: 1,
-              commandId: `activity-${providerSession.id}-${entry.actionKey}-${entry.terminal ? "end" : "start"}`,
-              correlationId: deps.correlationId,
-              actor,
-              type: "RECORD_AGENT_RUN_ACTIVITY",
-              payload: {
-                agentRunId,
-                providerSessionId: providerSession.id,
-                provider: invocationProvider,
-                entry,
-              },
-            });
-          } catch (error: unknown) {
-            // One failed entry must not abandon the rest of the queue, and must never reach the
-            // caller: the drain runs on a timer, where a throw would be an unhandled rejection.
-            markActivityDegraded();
-            deps.logger.debug(
-              { providerSessionId: providerSession.id, error: errorName(error) },
-              "An action could not be recorded; the activity feed for this run is degraded",
-            );
-          }
-        }
-        if (pending.length > 0) publishActivitySignal();
-      };
+const drainActivityQueue = (): void => {
+  const pending = live.activityQueue.splice(0, live.activityQueue.length);
+  for (const entry of pending) {
+    try {
+      deps.state.execute({
+        schemaVersion: 1,
+        commandId: `activity-${providerSession.id}-${entry.actionKey}-${entry.terminal ? "end" : "start"}`,
+        correlationId: deps.correlationId,
+        actor,
+        type: "RECORD_AGENT_RUN_ACTIVITY",
+        payload: {
+          agentRunId,
+          providerSessionId: providerSession.id,
+          provider: invocationProvider,
+          entry,
+        },
+      });
+    } catch (error: unknown) {
+      // One failed entry must not abandon the rest of the queue, and must never reach the
+      // caller: the drain runs on a timer, where a throw would be an unhandled rejection.
+      markActivityDegraded();
+      deps.logger.debug(
+        { providerSessionId: providerSession.id, error: errorName(error) },
+        "An action could not be recorded; the activity feed for this run is degraded",
+      );
+    }
+  }
+  if (pending.length > 0) publishActivitySignal();
+};
 ```
 
 - [ ] **Шаг 3a: Пометить ленту `degraded` сразу, а не только в конце**
@@ -1131,23 +1133,23 @@ hot path. Spec §Надёжность requires exactly this shape.
 как полную ровно тогда, когда он на неё смотрит. Сама эта запись тоже best-effort: её отказ ничего не роняет.
 
 ```ts
-      const markActivityDegraded = (): void => {
-        if (live.activityDegraded) return;
-        live.activityDegraded = true;
-        try {
-          deps.state.execute({
-            schemaVersion: 1,
-            commandId: `activity-degraded-${providerSession.id}`,
-            correlationId: deps.correlationId,
-            actor,
-            type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
-            payload: { agentRunId },
-          });
-        } catch {
-          // Nothing left to do: the feed is degraded and we could not even say so. The in-memory
-          // flag still makes the session-end write try again.
-        }
-      };
+const markActivityDegraded = (): void => {
+  if (live.activityDegraded) return;
+  live.activityDegraded = true;
+  try {
+    deps.state.execute({
+      schemaVersion: 1,
+      commandId: `activity-degraded-${providerSession.id}`,
+      correlationId: deps.correlationId,
+      actor,
+      type: "MARK_AGENT_RUN_ACTIVITY_DEGRADED",
+      payload: { agentRunId },
+    });
+  } catch {
+    // Nothing left to do: the feed is degraded and we could not even say so. The in-memory
+    // flag still makes the session-end write try again.
+  }
+};
 ```
 
 Эта команда добавляется в Task 6 тем же способом, что и `RECORD_AGENT_RUN_ACTIVITY` — контракт, обработчик, тест.
