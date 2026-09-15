@@ -11,7 +11,6 @@ import {
   type AgentRunStatus,
   type Checkpoint,
   type ContextWindowUsage,
-  type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
   type ModelTier,
@@ -76,6 +75,11 @@ import {
 } from "@loomrail/ui";
 
 import { ChangesSection } from "./ChangesSection";
+import {
+  isWorkItemTimelineEvent,
+  shouldKeepPagingForLifecycleEvent,
+  type WorkItemTimelineEvent,
+} from "./workItemTimeline";
 import { workItemAcceptanceExportUrl, workItemQAAttachmentUrl } from "../api";
 import {
   defaultBoardView,
@@ -89,6 +93,7 @@ import {
 import { PanelResizer } from "../components/PanelResizer";
 import { ProjectProviderAllowanceStrip } from "../components/ProviderAllowanceStrip";
 import { ProjectVerificationPanel } from "../components/ProjectVerificationPanel";
+import { RunActivitySection } from "../components/RunActivitySection";
 import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
@@ -633,7 +638,7 @@ const verificationFailureReasonLabelKeys: Record<VerificationFailure["reason"], 
   STALE: "verification.failure.STALE",
 };
 
-const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
+const eventPresentation = (event: WorkItemTimelineEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
       return {
@@ -1312,36 +1317,6 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.workspaceOrphaned"),
         tone: "warning",
       };
-    case "WORKSPACE_TOOL_CALL_CHANGED": {
-      const workspaceToolNeedsApproval =
-        event.data.call.status === "DENIED" &&
-        (event.data.call.failureCode === "WORKSPACE_ACCESS_DENIED" ||
-          event.data.call.failureCode === "RECIPE_NOT_APPROVED" ||
-          event.data.call.failureCode === "RECIPE_AUTHORITY_CHANGED" ||
-          event.data.call.failureCode === "NETWORK_POLICY_UNAVAILABLE");
-      return {
-        detail: t("event.workspaceToolCallDetail", {
-          operation: t(`workspaceTool.operation.${event.data.call.operation}`),
-          target: event.data.call.target,
-          status: workspaceToolNeedsApproval
-            ? t("workspaceTool.status.APPROVAL_REQUIRED")
-            : t(`workspaceTool.status.${event.data.call.status}`),
-        }),
-        icon:
-          event.data.call.status === "SUCCEEDED"
-            ? "check"
-            : event.data.call.status === "STARTED"
-              ? "clock"
-              : "warning",
-        label: t("event.workspaceToolCall"),
-        tone:
-          event.data.call.status === "SUCCEEDED"
-            ? "success"
-            : event.data.call.status === "STARTED"
-              ? "accent"
-              : "warning",
-      };
-    }
   }
 };
 
@@ -3424,15 +3399,29 @@ const ActivitySkeleton = ({ label }: { label?: string }): React.JSX.Element => (
 const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { locale, t } = useI18n();
   const eventsQuery = useWorkItemEvents(item.projectId, item.id);
-  const events = eventsQuery.data?.pages.flatMap((page) => page.events) ?? [];
+  const events = (eventsQuery.data?.pages.flatMap((page) => page.events) ?? []).filter(
+    isWorkItemTimelineEvent,
+  );
   const loadMore = (): void => {
     void eventsQuery.fetchNextPage();
   };
+  // See shouldKeepPagingForLifecycleEvent (workItemTimeline.ts) for why this auto-pages past a raw
+  // page that filtered down to nothing, instead of showing the owner an empty list.
+  const stillSearching = shouldKeepPagingForLifecycleEvent({
+    hasLoadedFirstPage: eventsQuery.data !== undefined,
+    hasNextPage: eventsQuery.hasNextPage,
+    lifecycleEventsLoaded: events.length,
+  });
+  useEffect(() => {
+    if (stillSearching && !eventsQuery.isFetchingNextPage) {
+      void eventsQuery.fetchNextPage();
+    }
+  }, [eventsQuery, stillSearching]);
 
   return (
     <InspectorSection
       action={
-        eventsQuery.data ? (
+        eventsQuery.data && !stillSearching ? (
           <span className="inspector-step-count">
             {eventsQuery.hasNextPage ? t("task.activityCountMore", { count: events.length }) : events.length}
           </span>
@@ -3449,7 +3438,7 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
           ))}
         </ol>
       ) : null}
-      {eventsQuery.hasNextPage ? (
+      {!stillSearching && eventsQuery.hasNextPage ? (
         <Button
           className="inspector-activity__more"
           disabled={eventsQuery.isFetchingNextPage}
@@ -3460,8 +3449,10 @@ const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element =>
           {t("task.loadMoreActivity")}
         </Button>
       ) : null}
-      {eventsQuery.isPending ? <ActivitySkeleton label={t("task.loadingActivity")} /> : null}
-      {eventsQuery.data && events.length === 0 ? (
+      {eventsQuery.isPending || stillSearching ? (
+        <ActivitySkeleton label={t("task.loadingActivity")} />
+      ) : null}
+      {eventsQuery.data && events.length === 0 && !stillSearching ? (
         <p className="inspector-copy">{t("task.noActivity")}</p>
       ) : null}
     </InspectorSection>
@@ -3654,6 +3645,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           <p className="inspector-copy">{t("task.noAcceptanceCriteria")}</p>
         )}
       </InspectorSection>
+
+      <RunActivitySection item={item} />
 
       <TaskActivitySection item={item} />
 

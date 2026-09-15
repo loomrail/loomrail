@@ -1,5 +1,6 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
+  ActivityOrigin,
   AttentionInboxResponse,
   AgentRun,
   AgentRunStatus,
@@ -20,9 +21,11 @@ import type {
   LaunchMeasurementPlan,
   LaunchMeasurementRun,
   LaunchRelease,
+  LiveProviderId,
   McpProfileView,
   McpSessionSnapshot,
   McpToolCallRecord,
+  ProviderActivityEntry,
   Project,
   ProjectConstitutionSnapshot,
   ProjectConstitutionVersion,
@@ -91,11 +94,25 @@ export type StateStoreErrorCode =
   | "AGENT_RUN_NOT_ACTIVE"
   | "AGENT_RUN_CAPACITY_EXHAUSTED"
   | "AGENT_RUN_BUDGET_EXHAUSTED"
+  // RECORD_AGENT_RUN_ACTIVITY is daemon-internal, same rationale as PROVIDER_USAGE_ACTOR_FORBIDDEN:
+  // the activity buffer carries no authority, but it still must not be forgeable by an arbitrary
+  // caller of the command surface.
+  | "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN"
+  // The named ProviderSession exists but its own `agent_run_id` does not match the payload's --
+  // including a session never bound to any AgentRun, where `agent_run_id` is null. Both rows were
+  // found; the failure is that they disagree. Kept distinct from WORKFLOW_NOT_FOUND (used for a
+  // genuinely missing row) so a caller gets a typed error that names what actually went wrong
+  // rather than one that reads as "nothing here" when something was there and wrong.
+  | "AGENT_RUN_ACTIVITY_SESSION_MISMATCH"
   | "QA_RUN_ALREADY_EXISTS"
   | "QA_RUN_NOT_FOUND"
   | "QA_STABLE_TREE_MISSING"
   | "QA_ATTACHMENT_NOT_FOUND"
   | "QA_RETENTION_ACTOR_FORBIDDEN"
+  // DELETE_EXPIRED_AGENT_RUN_ACTIVITY is daemon-internal, same rationale as
+  // VERIFICATION_RETENTION_ACTOR_FORBIDDEN/QA_RETENTION_ACTOR_FORBIDDEN: only apps/daemon's own
+  // startup sweep may prune this table, never a caller of the general command surface.
+  | "AGENT_RUN_ACTIVITY_RETENTION_ACTOR_FORBIDDEN"
   | "VERIFICATION_RUN_ALREADY_ACTIVE"
   | "VERIFICATION_RUN_NOT_FOUND"
   | "VERIFICATION_CHECK_NOT_FOUND"
@@ -139,6 +156,52 @@ export class StateStoreError extends Error {
     this.details = details;
   }
 }
+
+/**
+ * One row of the prunable `agent_run_activity` buffer, as read back for one AgentRun.
+ *
+ * Deliberately lacks `origin`, unlike the contracts' `AgentRunActivityEntry`: this is a raw read of
+ * a single table, and `origin` is computed by the merge layer that also reads `workspace_tool_calls`
+ * (a later task) from which table a row came from. Storing or returning it from here would let it
+ * be written wrongly instead of computed.
+ */
+export type AgentRunActivityRow = {
+  id: string;
+  seq: number;
+  observedAt: string;
+  provider: LiveProviderId;
+  kind: ProviderActivityEntry["kind"];
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+  truncated: boolean;
+};
+
+/**
+ * The newest Run Activity entry for one AgentRun, resolved across BOTH sources -- daemon-audited
+ * `workspace_tool_calls` and provider-reported `agent_run_activity` -- by the same rule the merged
+ * feed itself orders by (Task 8's `mergeRunActivity`: time first, then origin, then id), so this and
+ * a full page of the feed can never disagree about which entry is newest.
+ *
+ * A "newest-first sibling" of `AgentRunActivityRow` above and `WorkspaceToolCallRecord`'s own
+ * agent-run read: those two hand back one run's full history, oldest first, for a reader paging a
+ * run's story; this hands back many runs' single newest entry in one query, for a reader (the Agent
+ * Fleet table, and the Task Cockpit's collapsed Run Activity summary after it) who only ever wants
+ * to know "what is this AgentRun doing right now" and would otherwise have to page an entire run --
+ * or issue one query per run -- just to find out.
+ *
+ * `origin` is computed here, from which of the two source tables the winning row came from, exactly
+ * like every other read in this package: never stored, never accepted from a caller.
+ */
+export type LatestAgentRunActivityEntry = {
+  agentRunId: string;
+  id: string;
+  at: string;
+  origin: ActivityOrigin;
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+};
 
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
@@ -185,6 +248,10 @@ export type StateQuery =
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_WORKSPACE_TOOL_CALLS"; providerSessionId: string }
+  // Task 8's merge reads the audited side of the feed straight off `agent_run_id`, the column
+  // `workspace_tool_calls` already carries -- not by resolving a ProviderSession first, which would
+  // assume one session per AgentRun instead of just asking the table for what it already knows.
+  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"; agentRunId: string }
   | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
@@ -203,6 +270,34 @@ export type StateQuery =
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
   | { type: "GET_AGENT_RUN"; agentRunId: string }
+  | {
+      // Raw read of the prunable `agent_run_activity` buffer for one AgentRun (Task 6). Task 8's
+      // merged feed layers `origin` and cross-source pagination on top of this; this query only
+      // ever sees one table.
+      type: "LIST_AGENT_RUN_ACTIVITY";
+      agentRunId: string;
+      limit?: number;
+    }
+  | {
+      // Task 10's shared "what is it doing right now" read: the newest entry across BOTH Run
+      // Activity sources, for each of the given AgentRuns, in one query -- a newest-first sibling
+      // of LIST_AGENT_RUN_ACTIVITY and LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN above, which both
+      // read one run's full ascending history. A run with no entries in either source is simply
+      // absent from the result, not present with a null -- see LatestAgentRunActivityEntry.
+      type: "LIST_LATEST_AGENT_RUN_ACTIVITY";
+      agentRunIds: readonly string[];
+    }
+  | {
+      // SD-004's sweep, read side: `agent_run_activity` rows whose AgentRun belongs to a WorkItem
+      // that reached a terminal state at least `closedBefore` ago -- same "closed" join QA's
+      // LIST_EXPIRED_QA_ATTACHMENTS already uses (through the WorkItem's own closure Event, not a
+      // second notion of "closed" derived from `updated_at`). Bounded like every other
+      // LIST_EXPIRED_... query so apps/daemon's startup sweep never has to consider an unbounded
+      // backlog in one call.
+      type: "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES";
+      closedBefore: string;
+      limit?: number;
+    }
   | { type: "GET_QA_RUN"; qaRunId: string }
   | { type: "GET_QA_STATE"; pipelineRunId: string }
   | { type: "LIST_EXPIRED_QA_ATTACHMENTS"; closedBefore: string; limit?: number }
@@ -352,6 +447,14 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | {
+      type: "AGENT_RUN_ACTIVITY";
+      entries: AgentRunActivityRow[];
+      omittedCount: number;
+      degraded: boolean;
+    }
+  | { type: "LATEST_AGENT_RUN_ACTIVITY"; entries: LatestAgentRunActivityEntry[] }
+  | { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES"; entryIds: string[] }
   | { type: "QA_RUN"; qaRun: QARun | null }
   | {
       type: "QA_STATE";
@@ -462,7 +565,8 @@ export type LocalStateIdKind =
   | "mcpGrant"
   | "mcpSessionSnapshot"
   | "mcpToolCall"
-  | "workspaceToolCall";
+  | "workspaceToolCall"
+  | "agentRunActivity";
 
 /**
  * What startup reconciliation did about the process an orphaned ProviderSession left behind.

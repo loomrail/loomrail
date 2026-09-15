@@ -2732,6 +2732,31 @@ body.is-resizing {
   margin-top: 3px;
 }
 
+/* Task 10: the "what is it doing right now" column. Overflow follows the same rule as
+   .agent-fleet__task's own strong/span above -- ellipsis inside a min-width:0 block, never a
+   wrapped or widened cell -- so a long provider-reported label cannot break the table's layout. */
+.agent-fleet__latest-action {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-fleet__latest-action-label {
+  color: var(--lr-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The origin badge is a second, always-visible text label -- "Verified" / "Provider-reported" --
+   not a colour alone: colour is never the sole carrier of meaning in this table (see the Status
+   column's own dot-plus-text pattern above), and DAEMON_AUDITED vs PROVIDER_REPORTED is exactly
+   the kind of distinction a colour-blind or greyscale reading must not lose. */
+.agent-fleet__latest-action-origin {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
 .agent-fleet__empty {
   display: grid;
   min-height: 300px;
@@ -3684,6 +3709,173 @@ body.is-resizing {
   border-radius: var(--lr-radius-full);
   height: 20px;
   width: 20px;
+}
+
+/* Run Activity: what the agent did during a run, merged from the daemon-audited workspace tool
+   gateway and the provider's own unverified account of itself (docs/plans/126-agent-run-activity-
+   spec.ru.md). A native <details>/<summary> disclosure, matching the checkpoint card pattern in
+   packages/ui/src/patterns.tsx -- keyboard support and a focus ring come from the browser, not
+   from bespoke JS. */
+.run-activity {
+  display: grid;
+}
+
+.run-activity > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lr-space-2);
+  list-style: none;
+}
+
+.run-activity > summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-activity__chevron {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  transform: rotate(0deg);
+  transition: transform var(--lr-duration-fast) var(--lr-ease-standard);
+}
+
+.run-activity[open] > summary > .run-activity__chevron {
+  transform: rotate(90deg);
+}
+
+.run-activity > summary:focus-visible {
+  outline: 2px solid var(--lr-focus);
+  outline-offset: 2px;
+}
+
+.run-activity__latest {
+  color: var(--lr-text-secondary);
+  flex: 1 1 auto;
+  font-size: var(--lr-font-sm);
+  font-weight: var(--lr-weight-medium);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-activity__latest--empty {
+  color: var(--lr-text-faint);
+  font-weight: var(--lr-weight-normal);
+}
+
+/* Shown only when the collapsed headline is the merged feed's own last *loaded* row rather than
+   Agent Fleet's newest-first fact, and more of the feed exists beyond that page -- so it is not
+   provably the latest action, only the newest one loaded so far. */
+.run-activity__latest-note {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  font-size: var(--lr-font-xs);
+  font-style: italic;
+}
+
+.run-activity__count {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+}
+
+/* The origin badge is a second, always-visible text label, not colour alone -- the same rule
+   Agent Fleet's own latest-action column follows. DAEMON_AUDITED vs PROVIDER_REPORTED is exactly
+   the kind of distinction a colour-blind or greyscale reading must not lose. */
+.run-activity__entry-origin {
+  color: var(--lr-text-faint);
+  flex-shrink: 0;
+  font-size: var(--lr-font-xs);
+}
+
+.run-activity__body {
+  display: grid;
+  gap: var(--lr-space-2-5);
+  margin-top: var(--lr-space-2-5);
+}
+
+.run-activity__explainer {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.run-activity__notice {
+  background: var(--lr-warning-soft);
+  border-radius: var(--lr-radius-control);
+  color: var(--lr-text-secondary);
+  font-size: var(--lr-font-xs);
+  margin: 0;
+  padding: var(--lr-space-2) var(--lr-space-2-5);
+}
+
+.run-activity__entries {
+  display: grid;
+  gap: var(--lr-space-2-5);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-activity__entry {
+  display: grid;
+  gap: var(--lr-space-1);
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.run-activity__entry-time {
+  color: var(--lr-text-faint);
+  font-family: var(--lr-font-mono);
+  font-size: var(--lr-font-xs);
+  padding-top: 2px;
+}
+
+.run-activity__entry-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.run-activity__entry-heading {
+  align-items: baseline;
+  color: var(--lr-text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--lr-font-sm);
+  gap: var(--lr-space-2);
+}
+
+.run-activity__entry-detail {
+  color: var(--lr-text-muted);
+  font-size: var(--lr-font-xs);
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.run-activity__entry-meta {
+  color: var(--lr-text-faint);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--lr-font-xs);
+  gap: var(--lr-space-2);
+}
+
+.run-activity__entry-truncated {
+  font-style: italic;
+}
+
+.run-activity__more {
+  justify-self: start;
+}
+
+.run-activity__skeleton {
+  display: grid;
+  gap: var(--lr-space-2);
 }
 
 .workflow-budget {

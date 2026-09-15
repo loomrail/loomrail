@@ -72,6 +72,7 @@ import {
   getVerificationPlanSettings,
   getAttentionInbox,
   getAgentFleet,
+  getAgentRunActivity,
   getInsights,
   getWorkItemChanges,
   getWorkItemFileDiff,
@@ -160,6 +161,18 @@ const projectWorkItemDependenciesKey = (projectId: string) =>
   ["projects", projectId, "work-items", "dependencies"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
+// Nested under the same `["work-items", <id>]` prefix a WORK_ITEM channel signal invalidates
+// whole (eventStream.ts, scopesForSignal), which is what makes BOTH sources of this feed live
+// without any change to eventStream.ts. The DAEMON_AUDITED side gets there via the ordinary
+// Event log: every `WORKSPACE_TOOL_CALL_CHANGED` Event carries this work item as its aggregate,
+// and broadcastingState publishes a WORK_ITEM signal for every committed Event. The
+// PROVIDER_REPORTED side records no Event (activity.ts) but is not silent either: the session loop
+// publishes its own debounced WORK_ITEM signal straight to the channel after each drain
+// (session-loop.ts, publishActivitySignal, called from the same place that marks a feed
+// `degraded`) -- a second, direct publish path into the same channel, not routed through the Event
+// log at all. Both land on the same scope this key sits under, so one query key covers both.
+const workItemRunActivityKey = (workItemId: string, agentRunId: string) =>
+  ["work-items", workItemId, "run-activity", agentRunId] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
 const workItemVerificationRunsKey = (workItemId: string) =>
   ["work-items", workItemId, "verification-runs"] as const;
@@ -297,6 +310,31 @@ export const useAgentFleet = () =>
   useQuery({
     queryKey: agentFleetKey,
     queryFn: getAgentFleet,
+  });
+
+/**
+ * One AgentRun's merged Run Activity feed (Task 8), read oldest first and paged forward with
+ * `nextCursor` -- "a run's story", not a newest-first ticker. The first page is fetched eagerly
+ * (one bounded round trip, nowhere near "paging the whole feed") so `degraded`/`omittedCount` are
+ * known as soon as the AgentRun is; RunActivitySection.tsx gates only the *rendering* of the full
+ * list behind the owner's own expand (spec: "не становится основным содержимым Cockpit"), and
+ * fetches further pages only on an explicit "Show more", never walked automatically to find a
+ * tail. That is also why the collapsed summary prefers Agent Fleet's own newest-first
+ * `latestAction` (Task 10, `useAgentFleet`) over this oldest-first page's own last row.
+ */
+export const useAgentRunActivity = (workItemId: string | undefined, agentRunId: string | undefined) =>
+  useInfiniteQuery({
+    queryKey:
+      workItemId && agentRunId
+        ? workItemRunActivityKey(workItemId, agentRunId)
+        : ["work-items", "none", "run-activity", "none"],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
+      if (!agentRunId) throw new Error("An AgentRun is required to load its Run Activity");
+      return getAgentRunActivity(agentRunId, pageParam);
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: workItemId !== undefined && agentRunId !== undefined,
   });
 
 export const useInsights = () =>

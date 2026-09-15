@@ -20,6 +20,7 @@ import { createMcpGateway } from "../packages/mcp-gateway/dist/index.js";
 import { openLocalState, type LocalState } from "../packages/persistence-sqlite/dist/index.js";
 import { deliveryTemplate } from "../packages/workflow-engine/dist/index.js";
 import { addWorktree, inspectRepository } from "../packages/workspace/dist/index.js";
+import type { ProviderAdapter } from "../packages/provider-core/dist/index.js";
 
 /**
  * The repository a seeded Project points at, materialised the way registration would.
@@ -974,9 +975,33 @@ const chooseInSettings = async (page: Page, control: string, option: string): Pr
   await expect(settings).toHaveCount(0);
 };
 
-const workspaceExercisingProvider = () => {
+/**
+ * `base` unmodified except for one thing: IMPLEMENT's retry performs its audited write and then
+ * WAITS for the test to call `releaseImplementationWrite` before letting the session actually
+ * complete.
+ *
+ * Not a fixed delay. An earlier version of this fix used `setTimeout(…, 3_000)`, which review round
+ * 2 correctly called out as a real-but-bounded window: Run Activity reads the WorkItem's *current*
+ * stage attempt (RunActivitySection.tsx), and once the scripted REVIEW -> QA -> ACCEPTANCE chain
+ * below advances past IMPLEMENT, `currentStageAttemptId` moves on and "Write file" stops being
+ * something Run Activity can show at all -- no assertion timeout, however generous, buys back a
+ * window that has already closed. A gate the TEST releases, instead of a timer racing the test,
+ * keeps the window open for exactly as long as the assertion below needs it to be, on any machine
+ * under any load, with nothing to outrun. Not a NEEDS_HUMAN pause either: that would record a second
+ * Decision on this WorkItem, which the test's own event-pagination assertions further down (built
+ * around exactly one recorded decision) are not expecting -- this is the same session simply taking
+ * longer in wall-clock time, not a second one.
+ */
+const workspaceExercisingProvider = (): {
+  adapter: ProviderAdapter;
+  releaseImplementationWrite: () => void;
+} => {
   const base = createProviderTestDouble();
-  return {
+  let release: () => void = () => undefined;
+  const implementationWriteObserved = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const adapter: ProviderAdapter = {
     ...base,
     start: async (...args: Parameters<typeof base.start>) => {
       const [invocation] = args;
@@ -993,6 +1018,7 @@ const workspaceExercisingProvider = () => {
           invocation.authoritySignal,
         );
         if (changed.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${changed.code}`);
+        await implementationWriteObserved;
       }
       if (invocation.session.stage === "QA") {
         if (invocation.workspaceTools === undefined) throw new Error("QA has no workspace tools");
@@ -1011,6 +1037,7 @@ const workspaceExercisingProvider = () => {
       return base.start(...args);
     },
   };
+  return { adapter, releaseImplementationWrite: release };
 };
 
 test.describe("authenticated walking skeleton", () => {
@@ -1752,12 +1779,13 @@ test.describe("authenticated walking skeleton", () => {
   });
 
   test("persists the full provider-double delivery and gates Done on owner acceptance", async ({ page }) => {
+    const { adapter, releaseImplementationWrite } = workspaceExercisingProvider();
     daemon = await startDaemon({
       bootstrapToken: randomBytes(32).toString("base64url"),
       logger: false,
       webRoot: resolve("apps/web/dist"),
       browserQADriver: passingBrowserQADriver(),
-      providerAdapter: workspaceExercisingProvider(),
+      providerAdapter: adapter,
     });
 
     await page.goto(daemon.bootstrapUrl);
@@ -1831,10 +1859,41 @@ test.describe("authenticated walking skeleton", () => {
     if (overrideBudgetControlBox && overrideModelControlBox) {
       expect(Math.abs(overrideBudgetControlBox.y - overrideModelControlBox.y)).toBeLessThanOrEqual(0.5);
     }
+    // Expanded before the retry starts, so it is already showing IMPLEMENT's own AgentRun the
+    // moment the audited write below lands, rather than racing an extra click against it.
+    const runActivity = restoredInspector
+      .locator(".lr-inspector-section")
+      .filter({ has: page.getByText("Run Activity", { exact: true }) });
+    await runActivity.locator("summary").click();
+
     await overrideBudget.fill("200");
     await expect(workflowSection.getByRole("button", { name: "Approve cost policy" })).toBeEnabled();
     await workflowSection.getByRole("button", { name: "Approve cost policy" }).click();
     await expect(workflowSection.getByText("100 of 200", { exact: true })).toBeVisible();
+
+    // IMPLEMENT's retry (workspaceExercisingProvider, above) performs one real audited write and
+    // then WAITS on this exact assertion -- via `releaseImplementationWrite`, called only once it
+    // resolves -- so `run.currentStageAttemptId` (and therefore Run Activity's own read) is
+    // guaranteed to still be on THIS AgentRun for as long as it takes to see it, on any machine under
+    // any load. This is the same audited action a stale assertion further down used to look for in
+    // the now-removed WorkItem-lifecycle Activity timeline (workItemTimeline.ts's
+    // `isWorkItemTimelineEvent` excludes WORKSPACE_TOOL_CALL_CHANGED from it entirely; Run Activity
+    // shows it while this stage is current; once the pipeline advances, it's not visible on any screen,
+    // though rows stay in `workspace_tool_calls` and the change is visible in Changes).
+    //
+    // `releaseImplementationWrite` runs in a `finally`: the provider double's `start` is parked on
+    // the promise it resolves (workspaceExercisingProvider, above), so if this assertion times out
+    // instead of resolving, an un-released gate would leave that fake session hanging forever --
+    // `daemon?.close()` in `afterEach` waiting on a session that can never finish, turning one
+    // flaky/failing assertion into a hung test run instead of a clean failure.
+    try {
+      await expect(
+        runActivity.locator(".run-activity__entries").getByText("Write file", { exact: true }),
+      ).toBeVisible({ timeout: BUDGET_WALL_MS });
+    } finally {
+      releaseImplementationWrite();
+    }
+
     await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
       timeout: BUDGET_WALL_MS,
     });
@@ -1877,7 +1936,10 @@ test.describe("authenticated walking skeleton", () => {
       await expect(discoveryDecision.or(showMoreActivity)).toBeVisible({ timeout: BUDGET_WALL_MS });
     }
     await expect(discoveryDecision).toBeVisible();
-    await expect(restoredInspector.getByText("Workspace operation", { exact: true }).first()).toBeVisible();
+    // The audited workspace write this used to look for here (in the pre-Task-9 Activity timeline,
+    // labelled "Workspace operation") is checked above, in Run Activity, its current and only home --
+    // by this point in the run `currentStageAttemptId` has moved on to ACCEPTANCE, so IMPLEMENT's own
+    // AgentRun (and its Run Activity feed) is no longer the one this inspector reads.
     const acceptanceResponsePromise = page.waitForResponse(
       (response) => response.url().includes("/acceptance/") && response.url().endsWith("/resolve"),
     );

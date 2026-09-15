@@ -45,7 +45,7 @@ const hasControlCharacters = (value: string): boolean => {
 };
 
 type Platform = "darwin" | "linux" | "win32";
-type EnvironmentSource = Readonly<Record<string, string | undefined>>;
+export type EnvironmentSource = Readonly<Record<string, string | undefined>>;
 
 export type WorkspaceToolAudit = {
   reserve: (input: {
@@ -201,7 +201,15 @@ const successOutcome = (result: WorkspaceToolSuccess): WorkspaceToolTerminalOutc
   };
 };
 
-const secretRedactions = (source: EnvironmentSource, paths: readonly string[]): readonly string[] => [
+/**
+ * The values that must never survive into anything this package records: the roots it is given plus
+ * every environment value whose NAME says it is a credential.
+ *
+ * Exported so a second recorder of provider output does not grow a second, drifting copy of this
+ * predicate. The daemon's activity recorder redacts with exactly this set, because it is recording
+ * output from the same child processes, in the same worktree, under the same environment.
+ */
+export const secretRedactions = (source: EnvironmentSource, paths: readonly string[]): readonly string[] => [
   ...paths,
   ...Object.entries(source)
     .filter(

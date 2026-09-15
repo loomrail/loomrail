@@ -132,6 +132,7 @@ describe("agent contracts", () => {
       status: "WAITING",
       waitReason: "GLOBAL_LIMIT",
       startedAt: null,
+      latestAction: null,
     } as const;
 
     expect(agentFleetEntrySchema.parse(waiting)).toEqual(waiting);
@@ -143,6 +144,43 @@ describe("agent contracts", () => {
         agentRunId: "agent-run-1",
         startedAt: null,
         waitReason: null,
+      }),
+    ).toThrow();
+  });
+
+  // Task 10: a queued Fleet entry has no AgentRun, so LIST_LATEST_AGENT_RUN_ACTIVITY was never read
+  // for it -- a non-null latestAction there would be a fact about an AgentRun the entry does not
+  // name.
+  it("only lets a running Fleet entry report a latest action", () => {
+    const running = {
+      schemaVersion: 1,
+      project: { id: "project-1", name: "Project one" },
+      workItem: { id: "work-1", title: "Ship the bounded pool" },
+      pipelineRunId: "pipeline-1",
+      stageAttemptId: "attempt-1",
+      dispatchId: null,
+      agentRunId: "agent-run-1",
+      profile: { id: profile.id, revision: profile.revision, role: profile.role },
+      stage: "IMPLEMENT",
+      provider: "CODEX",
+      status: "RUNNING",
+      waitReason: null,
+      startedAt: "2026-09-01T10:00:00.000Z",
+      latestAction: { label: "pnpm test", origin: "PROVIDER_REPORTED" },
+    } as const;
+
+    expect(agentFleetEntrySchema.parse(running)).toEqual(running);
+    expect(agentFleetEntrySchema.parse({ ...running, latestAction: null })).toEqual({
+      ...running,
+      latestAction: null,
+    });
+    expect(() =>
+      agentFleetEntrySchema.parse({
+        ...running,
+        status: "WAITING",
+        agentRunId: null,
+        startedAt: null,
+        waitReason: "GLOBAL_LIMIT",
       }),
     ).toThrow();
   });

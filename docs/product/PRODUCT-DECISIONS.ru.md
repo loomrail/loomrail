@@ -371,6 +371,10 @@ Tasks, events, decisions, usage summaries и handoffs сохраняются б�
 screenshots, traces и временные builds по умолчанию удаляются через 30 дней после закрытия работы. Очистка не
 затрагивает Git.
 
+> Свёртка по возрасту применяется к таблице `agent_run_activity` — ленте Run Activity уровня 1 — при каждом старте
+> демона, отдельно от предела в 1 000 записей на прогон с вытеснением самых ранних, который продолжает ограничивать
+> каждый AgentRun сам по себе. См. [ADR-0034](../adr/0034-diagnostic-provider-activity.md).
+
 ### SD-005 — Public-alpha reporting требует preview и одноразового действия владельца
 
 Local Insights вычисляются по запросу из aggregate counts и остаются внутри authenticated loopback session. Public
@@ -393,8 +397,14 @@ Task actions. Из неё пользователь переходит в project
 
 ### UXD-002 — Task Cockpit
 
-Task detail содержит Overview, Workflow, Runs, Changes, Review, QA и Activity. Questions/actions находятся в
-contextual inspector. Raw terminal и provider logs раскрываются по запросу.
+Task detail содержит Overview, Workflow, Runs, Changes, Review, QA, Run Activity и Activity. Questions/actions
+находятся в contextual inspector. Raw terminal и provider logs раскрываются по запросу.
+
+Уточнение (ADR-0034): секция Run Activity, раскрываемая по запросу владельца, — это не раскрытие raw logs. Она
+показывает ограниченную отредактированную проекцию того, о чём провайдер отчитался сам, сведённую с
+daemon-audited вызовами инструментов; сырой stdout/stderr провайдера по-прежнему не записывается (SD-003,
+THREAT-MODEL §Q7). Раскрытие именно raw terminal и provider logs остаётся отдельной, ещё не реализованной
+capability и требует собственного решения.
 
 ### UXD-003 — Visual direction
 

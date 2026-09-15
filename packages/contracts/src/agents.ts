@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { activityOriginSchema } from "./activity.js";
 import { providerModelIdSchema, providerPreferenceSchema } from "./provider-selection.js";
 import { modelTierSchema, opaqueIdSchema, schemaVersionSchema, utcTimestampSchema } from "./shared.js";
 import { contextSectionIdSchema, providerIdSchema, workflowStageSchema } from "./workflow.js";
@@ -240,6 +241,23 @@ export const agentFleetWaitReasonSchema = z.enum([
 export const agentFleetEntryStatusSchema = z.enum(["READY", "WAITING", "RUNNING"]);
 export const maxAgentFleetEntries = 200;
 
+// Task 10: the newest thing a running agent has done, across both Run Activity sources (daemon
+// -audited and provider-reported). `label` is bare text -- for a DAEMON_AUDITED entry it is a
+// `WorkspaceToolOperation` code meant for the `workspaceTool.operation.*` i18n lookup the Run
+// Activity feed already uses; for a PROVIDER_REPORTED entry it is the provider's own free text,
+// untrusted and rendered as-is. Which reading applies is exactly what `origin` tells the caller, so
+// this carries no separate "is this translatable" flag of its own.
+export const agentFleetLatestActionSchema = z
+  .object({
+    // Bounded at 500, matching `agentRunActivityEntrySchema.label`'s own max (not this file's
+    // `shortTextSchema`, whose 200-char cap is a UI convention for names and titles, not for a
+    // provider's free-text description of what it just did) -- the source of this text, never a
+    // UI concern of the Fleet's own.
+    label: z.string().trim().min(1).max(500),
+    origin: activityOriginSchema,
+  })
+  .strict();
+
 export const agentFleetEntrySchema = z
   .object({
     schemaVersion: schemaVersionSchema,
@@ -255,6 +273,10 @@ export const agentFleetEntrySchema = z
     status: agentFleetEntryStatusSchema,
     waitReason: agentFleetWaitReasonSchema.nullable(),
     startedAt: utcTimestampSchema.nullable(),
+    // Nullable rather than omitted: a running entry legitimately has no activity yet (its first
+    // provider report has not landed), and that is a different fact from "this entry cannot have
+    // one" (every queued entry below).
+    latestAction: agentFleetLatestActionSchema.nullable(),
   })
   .strict()
   .superRefine((entry, context) => {
@@ -269,6 +291,12 @@ export const agentFleetEntrySchema = z
     }
     if ((entry.status === "WAITING") !== (entry.waitReason !== null)) {
       context.addIssue({ code: "custom", message: "Only a waiting Fleet entry has a wait reason" });
+    }
+    if (entry.latestAction !== null) {
+      context.addIssue({
+        code: "custom",
+        message: "Only a running Fleet entry -- the one with an AgentRun -- can report a latest action",
+      });
     }
   });
 
@@ -301,5 +329,6 @@ export type AgentRunPolicySnapshot = z.infer<typeof agentRunPolicySnapshotSchema
 export type AgentRun = z.infer<typeof agentRunSchema>;
 export type AgentFleetWaitReason = z.infer<typeof agentFleetWaitReasonSchema>;
 export type AgentFleetEntryStatus = z.infer<typeof agentFleetEntryStatusSchema>;
+export type AgentFleetLatestAction = z.infer<typeof agentFleetLatestActionSchema>;
 export type AgentFleetEntry = z.infer<typeof agentFleetEntrySchema>;
 export type AgentFleetResponse = z.infer<typeof agentFleetResponseSchema>;

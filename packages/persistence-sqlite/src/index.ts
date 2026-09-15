@@ -11,6 +11,7 @@ import {
   agentRunPolicySnapshotSchema,
   agentRunSchema,
   agentRunStatusSchema,
+  maxAgentFleetEntries,
   maxAttentionProjectionSources,
   budgetPolicySchema,
   checkpointSchema,
@@ -343,6 +344,8 @@ import { canonicalJson } from "./canonical-json.js";
 import { applyMigrations, databaseWasNonEmpty } from "./migrations.js";
 import {
   StateStoreError,
+  type AgentRunActivityRow,
+  type LatestAgentRunActivityEntry,
   type LocalState,
   type OpenLocalStateOptions,
   type OrphanProcessEvent,
@@ -442,6 +445,85 @@ const agentRunRowSchema = z.object({
   finished_at: z.string().nullable(),
   version: z.number().int(),
 });
+
+// The `next_seq` this write claimed, from step 1's `INSERT ... ON CONFLICT DO UPDATE RETURNING`.
+const agentRunActivityClaimRowSchema = z.object({ next_seq: z.number().int() });
+
+// The row this write's upsert landed on, from step 2's `RETURNING id, seq` -- either a fresh insert
+// or the row its matching start already created, whichever the ON CONFLICT merge kept.
+const agentRunActivityUpsertedRowSchema = z.object({ id: z.string(), seq: z.number().int() });
+
+// The counters after step 3's eviction, from `RETURNING omitted_count, degraded`.
+const agentRunActivityCountersRowSchema = z.object({
+  omitted_count: z.number().int(),
+  degraded: z.number().int(),
+});
+
+// The full per-run counters, for a plain read with no write alongside it (the LIST query).
+const agentRunActivityStateRowSchema = z.object({
+  next_seq: z.number().int(),
+  omitted_count: z.number().int(),
+  degraded: z.number().int(),
+});
+
+// SD-004's sweep, read side: `selectExpiredAgentRunActivityEntries` selects nothing but the id --
+// the daemon orchestrator only ever needs the count and, on the next call, a fresh page.
+const agentRunActivityRetentionCandidateRowSchema = z.object({ id: z.string() });
+
+const agentRunActivityEntryRowSchema = z.object({
+  id: z.string(),
+  seq: z.number().int(),
+  provider: z.enum(["CODEX", "CLAUDE_CODE"]),
+  kind: z.enum(["TOOL_CALL", "AGENT_TEXT", "FILE_CHANGE", "PROVIDER_ERROR"]),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+  status: z.string().nullable(),
+  truncated: z.number().int(),
+  observed_at: z.string(),
+});
+
+const agentRunActivityRowFromRow = (value: unknown): AgentRunActivityRow => {
+  const row = agentRunActivityEntryRowSchema.parse(value);
+  return {
+    id: row.id,
+    seq: row.seq,
+    observedAt: row.observed_at,
+    provider: row.provider,
+    kind: row.kind,
+    label: row.label,
+    detail: row.detail,
+    status: row.status,
+    truncated: row.truncated === 1,
+  };
+};
+
+// Task 10's newest-across-both-sources read. `origin_rank` is the raw `0`/`1` the query's own
+// `ORDER BY ... origin_rank DESC` used to break same-timestamp ties -- see the SQL's comment on
+// `selectLatestAgentRunActivity` for why `0` (DAEMON_AUDITED) must sort behind `1`
+// (PROVIDER_REPORTED), matching Task 8's `ORIGIN_ORDER`. Translated to the named `origin` value
+// here, at the read boundary, rather than carried as a bare number past this function.
+const latestAgentRunActivityRowSchema = z.object({
+  agent_run_id: z.string(),
+  id: z.string(),
+  at: z.string(),
+  origin_rank: z.union([z.literal(0), z.literal(1)]),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+  status: z.string().nullable(),
+});
+
+const latestAgentRunActivityFromRow = (value: unknown): LatestAgentRunActivityEntry => {
+  const row = latestAgentRunActivityRowSchema.parse(value);
+  return {
+    agentRunId: row.agent_run_id,
+    id: row.id,
+    at: row.at,
+    origin: row.origin_rank === 0 ? "DAEMON_AUDITED" : "PROVIDER_REPORTED",
+    label: row.label,
+    detail: row.detail,
+    status: row.status,
+  };
+};
 
 const criterionRowSchema = z.object({ criterion: z.string() });
 
@@ -1474,6 +1556,9 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("LIST_MCP_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
+  z
+    .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"), agentRunId: opaqueIdSchema })
+    .strict(),
   z.object({ type: z.literal("LIST_STARTED_WORKSPACE_TOOL_CALLS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS") }).strict(),
@@ -1494,6 +1579,30 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
   z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
+  z
+    .object({
+      type: z.literal("LIST_AGENT_RUN_ACTIVITY"),
+      agentRunId: opaqueIdSchema,
+      // 2_000, not the table's own 1_000-row bound: a caller reading the buffer at its cap must
+      // still be able to ask for "everything held" without the query schema refusing the number.
+      limit: z.number().int().min(1).max(2_000).default(200),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_LATEST_AGENT_RUN_ACTIVITY"),
+      // Bounded at the Fleet's own cap, its only caller today: no read of this ever needs more
+      // AgentRun ids than the Fleet can show at once.
+      agentRunIds: z.array(opaqueIdSchema).max(maxAgentFleetEntries),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES"),
+      closedBefore: utcTimestampSchema,
+      limit: z.number().int().min(1).max(1_000).default(200),
+    })
+    .strict(),
   z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_QA_STATE"), pipelineRunId: opaqueIdSchema }).strict(),
   z
@@ -3692,6 +3801,12 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     const selectWorkspaceToolCallsForSession = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE provider_session_id = ? ORDER BY started_at, id",
     );
+    // Task 8's merged activity feed: the audited half, read straight by `agent_run_id` rather than
+    // through a ProviderSession lookup, ordered the same way as the reported side's own query so a
+    // read-time `seq` (the table itself has none) can be assigned by array position deterministically.
+    const selectWorkspaceToolCallsForAgentRun = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE agent_run_id = ? ORDER BY started_at, id",
+    );
     const selectWorkspaceToolCallsForStageAttempt = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE stage_attempt_id = ? ORDER BY started_at, id",
     );
@@ -4071,6 +4186,209 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       "SELECT * FROM agent_runs WHERE stage_attempt_id = ? ORDER BY ordinal DESC, rowid DESC LIMIT 1",
     );
     const selectAgentRunById = database.prepare("SELECT * FROM agent_runs WHERE id = ?");
+    // Step 1 of RECORD_AGENT_RUN_ACTIVITY: claim the next per-run sequence number, creating the
+    // counters row on first use. Runs on every write, including one that step 2 below merges into
+    // an existing row, which is why `seq` is monotonic but not dense. Despite the column name, the
+    // `next_seq` this statement returns is the value THIS write just claimed (and step 2 stores as
+    // its row's `seq`), not the value the next write will claim -- that one is produced by the next
+    // `next_seq + 1` on the row this leaves behind.
+    const claimAgentRunActivitySeq = database.prepare(
+      `INSERT INTO agent_run_activity_state (agent_run_id, schema_version, next_seq, omitted_count, degraded)
+       VALUES (?, 1, 1, 0, 0)
+       ON CONFLICT (agent_run_id) DO UPDATE SET next_seq = next_seq + 1
+       RETURNING next_seq`,
+    );
+    // Step 2: create the entry, or fold a terminal report into the row its start already created.
+    // The ON CONFLICT branch never overwrites a non-null label/detail with null -- a terminal report
+    // adds an outcome, it does not erase the starting observation.
+    const upsertAgentRunActivityEntry = database.prepare(
+      `INSERT INTO agent_run_activity (
+         id, schema_version, project_id, work_item_id, agent_run_id, provider_session_id,
+         seq, action_key, provider, kind, label, detail, status, truncated, observed_at
+       ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (provider_session_id, action_key) DO UPDATE SET
+         status = COALESCE(excluded.status, agent_run_activity.status),
+         label = COALESCE(agent_run_activity.label, excluded.label),
+         detail = COALESCE(agent_run_activity.detail, excluded.detail),
+         truncated = max(agent_run_activity.truncated, excluded.truncated)
+       RETURNING id, seq`,
+    );
+    // Step 3: evict the oldest rows past the bound and count what was dropped, honestly, in the
+    // per-run counters rather than silently.
+    const evictOldestAgentRunActivity = database.prepare(
+      `DELETE FROM agent_run_activity
+       WHERE id IN (
+         SELECT id FROM agent_run_activity
+         WHERE agent_run_id = ?
+         ORDER BY seq ASC
+         LIMIT max(0, (SELECT count(*) FROM agent_run_activity WHERE agent_run_id = ?) - 1000)
+       )`,
+    );
+    const addAgentRunActivityOmittedCount = database.prepare(
+      `UPDATE agent_run_activity_state
+       SET omitted_count = omitted_count + ?
+       WHERE agent_run_id = ?
+       RETURNING omitted_count, degraded`,
+    );
+    // MARK_AGENT_RUN_ACTIVITY_DEGRADED's write. Same INSERT ... ON CONFLICT idiom as step 1 above,
+    // so a run whose very first RECORD_AGENT_RUN_ACTIVITY write failed -- before this row ever
+    // existed -- still gets its degradation recorded, rather than the mark silently affecting zero
+    // rows for lack of one to update. The ON CONFLICT branch touches only `degraded`, leaving
+    // next_seq/omitted_count exactly as a real recorder write left them (or would later leave them).
+    const markAgentRunActivityDegraded = database.prepare(
+      `INSERT INTO agent_run_activity_state (agent_run_id, schema_version, next_seq, omitted_count, degraded)
+       VALUES (?, 1, 1, 0, 1)
+       ON CONFLICT (agent_run_id) DO UPDATE SET degraded = 1`,
+    );
+    const selectAgentRunActivityEntries = database.prepare(
+      `SELECT id, seq, provider, kind, label, detail, status, truncated, observed_at
+       FROM agent_run_activity
+       WHERE agent_run_id = ?
+       ORDER BY observed_at, id
+       LIMIT ?`,
+    );
+    const selectAgentRunActivityState = database.prepare(
+      "SELECT next_seq, omitted_count, degraded FROM agent_run_activity_state WHERE agent_run_id = ?",
+    );
+    // Task 10: the newest Run Activity entry per AgentRun, across BOTH `workspace_tool_calls` and
+    // `agent_run_activity`, for however many AgentRuns the Fleet is currently rendering -- one
+    // statement, bound once at startup like every other query in this file, not re-prepared per
+    // call with a hand-built `IN (?,?,?)` list whose placeholder count would have to match the
+    // caller's array length. `json_each(?)` takes that variable-length list as a single JSON-array
+    // parameter instead.
+    //
+    // `origin_rank` -- `0` for an audited row, `1` for a reported one -- exists only to give the
+    // window function's `ORDER BY` a tie-break identical to Task 8's `mergeRunActivity`
+    // (`ORIGIN_ORDER: { DAEMON_AUDITED: 0, PROVIDER_REPORTED: 1 }`, ascending): two entries sharing
+    // an exact timestamp must resolve to the same "which is newer" answer here as they would at the
+    // tail of a full merged page, or this read and the feed it summarizes could disagree. Ranking
+    // `ROW_NUMBER() OVER (PARTITION BY agent_run_id ORDER BY at DESC, origin_rank DESC, id DESC)`
+    // and keeping `rn = 1` picks, per run, the row that would sort LAST in that feed's ascending
+    // order -- its newest entry -- which is why every key in the window is DESC here where the
+    // feed's own ordering is ASC.
+    const selectLatestAgentRunActivity = database.prepare(
+      `WITH target_runs AS (
+         SELECT value AS agent_run_id FROM json_each(?)
+       ),
+       audited AS (
+         SELECT
+           agent_run_id, id, started_at AS at, 0 AS origin_rank,
+           operation AS label, target AS detail, status
+         FROM workspace_tool_calls
+         WHERE agent_run_id IN (SELECT agent_run_id FROM target_runs)
+       ),
+       reported AS (
+         SELECT
+           agent_run_id, id, observed_at AS at, 1 AS origin_rank,
+           label, detail, status
+         FROM agent_run_activity
+         WHERE agent_run_id IN (SELECT agent_run_id FROM target_runs)
+       ),
+       combined AS (
+         SELECT * FROM audited
+         UNION ALL
+         SELECT * FROM reported
+       ),
+       ranked AS (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY agent_run_id ORDER BY at DESC, origin_rank DESC, id DESC
+         ) AS rn
+         FROM combined
+       )
+       SELECT agent_run_id, id, at, origin_rank, label, detail, status
+       FROM ranked
+       WHERE rn = 1`,
+    );
+    // SD-004's sweep for `agent_run_activity` (Task 13). Same "closed" join as
+    // `selectExpiredQAAttachmentRefs` below -- through the WorkItem's own closure Event, not
+    // `work_items.updated_at` -- deliberately: two notions of "closed" in one codebase is how
+    // retention policies drift apart, and this table reaches its WorkItem one hop further
+    // (`agent_run_activity` -> `agent_runs.work_item_id`) than QA's own attachments do.
+    const selectExpiredAgentRunActivityEntries = database.prepare(
+      `SELECT agent_run_activity.id
+       FROM agent_run_activity
+       INNER JOIN agent_runs ON agent_runs.id = agent_run_activity.agent_run_id
+       INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+       INNER JOIN events AS closure_event ON closure_event.sequence = (
+         SELECT MAX(history.sequence) FROM events AS history
+         WHERE history.aggregate_id = work_items.id
+           AND (
+             history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+             OR (
+               history.type = 'WORK_ITEM_STATE_CHANGED'
+               AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+             )
+           )
+       )
+       WHERE work_items.state IN ('DONE', 'CANCELLED')
+         AND closure_event.occurred_at <= ?
+       ORDER BY closure_event.occurred_at, agent_run_activity.observed_at, agent_run_activity.id
+       LIMIT ?`,
+    );
+    // The delete side of the same read: identical predicate, so what this removes is exactly what
+    // the LIST query above just reported as selected -- re-run here rather than threading the
+    // LIST result's ids back in through a hand-built `IN (?, ?, ...)` placeholder list (the pattern
+    // `selectLatestAgentRunActivity`'s own doc comment above calls out as worth avoiding).
+    const deleteExpiredAgentRunActivityEntries = database.prepare(
+      `DELETE FROM agent_run_activity
+       WHERE id IN (
+         SELECT agent_run_activity.id
+         FROM agent_run_activity
+         INNER JOIN agent_runs ON agent_runs.id = agent_run_activity.agent_run_id
+         INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+         INNER JOIN events AS closure_event ON closure_event.sequence = (
+           SELECT MAX(history.sequence) FROM events AS history
+           WHERE history.aggregate_id = work_items.id
+             AND (
+               history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+               OR (
+                 history.type = 'WORK_ITEM_STATE_CHANGED'
+                 AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+               )
+             )
+         )
+         WHERE work_items.state IN ('DONE', 'CANCELLED')
+           AND closure_event.occurred_at <= ?
+         ORDER BY closure_event.occurred_at, agent_run_activity.observed_at, agent_run_activity.id
+         LIMIT ?
+       )`,
+    );
+    // A run's counters row (`omitted_count`/`degraded`) outlives its entries only while some of
+    // them remain to describe. Once the WorkItem behind an AgentRun is closed-and-expired AND
+    // nothing is left in `agent_run_activity` for it -- whether this same transaction's delete
+    // above just emptied it, an earlier startup's sweep already did, or the recorder's first write
+    // failed before any entry ever existed (MARK_AGENT_RUN_ACTIVITY_DEGRADED can create this row
+    // with zero entries) -- the row describes nothing a reader can still see and is pruned with it,
+    // so LIST_AGENT_RUN_ACTIVITY on a fully swept run reads as "nothing here" rather than stale
+    // counters left orphaned forever.
+    const deleteExpiredAgentRunActivityState = database.prepare(
+      `DELETE FROM agent_run_activity_state
+       WHERE agent_run_id IN (
+         SELECT agent_run_activity_state.agent_run_id
+         FROM agent_run_activity_state
+         INNER JOIN agent_runs ON agent_runs.id = agent_run_activity_state.agent_run_id
+         INNER JOIN work_items ON work_items.id = agent_runs.work_item_id
+         INNER JOIN events AS closure_event ON closure_event.sequence = (
+           SELECT MAX(history.sequence) FROM events AS history
+           WHERE history.aggregate_id = work_items.id
+             AND (
+               history.type IN ('PIPELINE_CANCELLED', 'PIPELINE_COMPLETED')
+               OR (
+                 history.type = 'WORK_ITEM_STATE_CHANGED'
+                 AND json_extract(history.data_json, '$.workItem.state') IN ('DONE', 'CANCELLED')
+               )
+             )
+         )
+         WHERE work_items.state IN ('DONE', 'CANCELLED')
+           AND closure_event.occurred_at <= ?
+           AND NOT EXISTS (
+             SELECT 1 FROM agent_run_activity
+             WHERE agent_run_activity.agent_run_id = agent_run_activity_state.agent_run_id
+           )
+         ORDER BY agent_run_activity_state.agent_run_id
+         LIMIT ?
+       )`,
+    );
     const selectLatestSucceededDeveloperAgentRun = database.prepare(
       `SELECT * FROM agent_runs
        WHERE pipeline_run_id = ? AND profile_role = 'DEVELOPER' AND status = 'SUCCEEDED'
@@ -12171,6 +12489,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               "An orphaned AgentRun changed while it was being interrupted",
             );
           }
+          // The recorder's queue lived in the process that died. Whatever it still held when the
+          // daemon stopped was never written, and nothing will ever write it -- so the feed for this
+          // run is incomplete and has to say so. Left unmarked, a truncated feed reports
+          // `degraded = false`, which is exactly the silent lie the flag exists to prevent. Marked
+          // for every interrupted run rather than only for ones with rows, because "the buffer was
+          // lost" is not a thing this transaction can distinguish from "there was nothing in it".
+          markAgentRunActivityDegraded.run(current.id);
           // The existing reconciliation result predates A3 and intentionally remains compatible
           // with old command receipts; the durable Event is the new lifecycle fact.
           appendAgentEvent(
@@ -12812,6 +13137,142 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           hardPaused: decision.hardPaused,
           stageAttempt: decision.stageAttempt,
           events,
+        });
+      }
+
+      if (command.type === "RECORD_AGENT_RUN_ACTIVITY") {
+        // Daemon-internal, same as RECORD_PROVIDER_USAGE: the activity buffer carries no
+        // authority, but it still must not be forgeable by an arbitrary caller.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN",
+            "Only the provider session loop can record agent run activity",
+          );
+        }
+        // R3: the payload carries only `agentRunId`; `project_id`/`work_item_id` are derived from
+        // the AgentRun's own row inside this transaction rather than trusted from a second,
+        // potentially divergent copy. A plain row parse is enough -- unlike `agentRunFromRow`, this
+        // write needs neither the full domain object nor its policy-snapshot hash check.
+        const agentRunValue = selectAgentRunById.get(command.payload.agentRunId);
+        if (agentRunValue === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The AgentRun does not exist");
+        }
+        const agentRunRow = agentRunRowSchema.parse(agentRunValue);
+        const sessionValue = selectProviderSessionById.get(command.payload.providerSessionId);
+        if (sessionValue === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The ProviderSession does not exist");
+        }
+        const sessionRow = providerSessionRowSchema.parse(sessionValue);
+        if (sessionRow.agent_run_id !== command.payload.agentRunId) {
+          // Both rows were found -- this is not WORKFLOW_NOT_FOUND. `agent_run_id` is nullable, so
+          // a session never bound to any AgentRun also lands here rather than being conflated with
+          // "session not found".
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_SESSION_MISMATCH",
+            "The ProviderSession does not belong to this AgentRun",
+          );
+        }
+
+        const claim = agentRunActivityClaimRowSchema.parse(
+          claimAgentRunActivitySeq.get(command.payload.agentRunId),
+        );
+        // `entry.terminal` is accepted but never read below: the ON CONFLICT merge is
+        // order-insensitive (a terminal report folds its outcome into an existing row, or a late
+        // start folds into a row the terminal report already created), so which side of the pair
+        // this write is does not change what it does.
+        const entry = command.payload.entry;
+        const upserted = agentRunActivityUpsertedRowSchema.parse(
+          upsertAgentRunActivityEntry.get(
+            createId("agentRunActivity"),
+            agentRunRow.project_id,
+            agentRunRow.work_item_id,
+            command.payload.agentRunId,
+            command.payload.providerSessionId,
+            claim.next_seq,
+            entry.actionKey,
+            command.payload.provider,
+            entry.kind,
+            entry.label,
+            entry.detail,
+            entry.status,
+            entry.truncated ? 1 : 0,
+            occurredAt,
+          ),
+        );
+        const eviction = evictOldestAgentRunActivity.run(
+          command.payload.agentRunId,
+          command.payload.agentRunId,
+        );
+        const counters = agentRunActivityCountersRowSchema.parse(
+          addAgentRunActivityOmittedCount.get(eviction.changes, command.payload.agentRunId),
+        );
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RECORDED",
+          replayed: false,
+          entryId: upserted.id,
+          seq: upserted.seq,
+          omittedCount: counters.omitted_count,
+          degraded: counters.degraded === 1,
+        });
+      }
+
+      if (command.type === "MARK_AGENT_RUN_ACTIVITY_DEGRADED") {
+        // Same actor guard as RECORD_AGENT_RUN_ACTIVITY: this write carries no authority of its
+        // own, but still must not be forgeable by an arbitrary caller.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "session-loop") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_ACTOR_FORBIDDEN",
+            "Only the provider session loop can mark agent run activity degraded",
+          );
+        }
+        // The AgentRun must exist -- the same check RECORD_AGENT_RUN_ACTIVITY makes before it
+        // touches this table -- so a bogus id fails with a clear WORKFLOW_NOT_FOUND instead of the
+        // FK constraint on agent_run_activity_state.agent_run_id surfacing as an opaque persistence
+        // failure.
+        if (selectAgentRunById.get(command.payload.agentRunId) === undefined) {
+          throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The AgentRun does not exist");
+        }
+
+        markAgentRunActivityDegraded.run(command.payload.agentRunId);
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_DEGRADED_MARKED",
+          replayed: false,
+          agentRunId: command.payload.agentRunId,
+        });
+      }
+
+      if (command.type === "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
+        // Daemon-internal, same rationale as RECORD_QA_ATTACHMENT_RETENTION /
+        // RECORD_VERIFICATION_OUTPUT_RETENTION: only the local daemon's own startup sweep may prune
+        // this table, never an arbitrary caller of the general command surface.
+        if (command.actor.type !== "SYSTEM" || command.actor.id !== "local-daemon") {
+          throw new StateStoreError(
+            "AGENT_RUN_ACTIVITY_RETENTION_ACTOR_FORBIDDEN",
+            "Only the local daemon can prune expired agent run activity",
+          );
+        }
+        // Deleting the entries first means the state-row delete below -- running in the same
+        // transaction -- already sees this call's own deletions when it checks which runs now have
+        // nothing left in `agent_run_activity`, not just what earlier calls left behind.
+        const entries = deleteExpiredAgentRunActivityEntries.run(
+          command.payload.closedBefore,
+          command.payload.limit,
+        );
+        const state = deleteExpiredAgentRunActivityState.run(
+          command.payload.closedBefore,
+          command.payload.limit,
+        );
+
+        return stateCommandResultSchema.parse({
+          schemaVersion: 1,
+          type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
+          replayed: false,
+          entriesDeleted: entries.changes,
+          stateRowsDeleted: state.changes,
         });
       }
 
@@ -14125,6 +14586,13 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
               .all(queryValue.providerSessionId)
               .map(workspaceToolCallFromRow),
           };
+        case "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN":
+          return {
+            type: "WORKSPACE_TOOL_CALLS",
+            calls: selectWorkspaceToolCallsForAgentRun
+              .all(queryValue.agentRunId)
+              .map(workspaceToolCallFromRow),
+          };
         case "LIST_STARTED_WORKSPACE_TOOL_CALLS":
           return {
             type: "WORKSPACE_TOOL_CALLS",
@@ -14356,6 +14824,38 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
                   .all(queryValue.status, queryValue.limit);
           return { type: "AGENT_RUNS", runs: rows.map(agentRunFromRow) };
         }
+        case "LIST_AGENT_RUN_ACTIVITY": {
+          const entries = selectAgentRunActivityEntries
+            .all(queryValue.agentRunId, queryValue.limit)
+            .map(agentRunActivityRowFromRow);
+          const stateValue = selectAgentRunActivityState.get(queryValue.agentRunId);
+          // No counters row means RECORD_AGENT_RUN_ACTIVITY has never written for this run: nothing
+          // was ever omitted and the feed cannot be degraded, not an absence worth erroring on.
+          const state = stateValue === undefined ? null : agentRunActivityStateRowSchema.parse(stateValue);
+          return {
+            type: "AGENT_RUN_ACTIVITY",
+            entries,
+            omittedCount: state === null ? 0 : state.omitted_count,
+            degraded: state === null ? false : state.degraded === 1,
+          };
+        }
+        case "LIST_LATEST_AGENT_RUN_ACTIVITY":
+          return {
+            type: "LATEST_AGENT_RUN_ACTIVITY",
+            entries:
+              queryValue.agentRunIds.length === 0
+                ? []
+                : selectLatestAgentRunActivity
+                    .all(JSON.stringify(queryValue.agentRunIds))
+                    .map(latestAgentRunActivityFromRow),
+          };
+        case "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES":
+          return {
+            type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES",
+            entryIds: selectExpiredAgentRunActivityEntries
+              .all(queryValue.closedBefore, queryValue.limit)
+              .map((value) => agentRunActivityRetentionCandidateRowSchema.parse(value).id),
+          };
         case "LIST_REVIEW_REPORTS":
           return {
             type: "REVIEW_REPORTS",

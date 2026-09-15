@@ -3,6 +3,7 @@ import type {
   ContextPack,
   ContextWindowUsage,
   ModelTier,
+  ProviderActivityEntry,
   ProviderAllowanceSnapshot,
   ProviderOutcome,
   ProviderId,
@@ -53,6 +54,7 @@ export {
   projectProviderAllowanceAdvisory,
   projectProviderAllowanceFreshness,
 } from "./allowance.js";
+export * from "./activity-text.js";
 export {
   WORKSPACE_TOOL_MAX_CALLS,
   WORKSPACE_TOOL_MAX_DIRECTORY_ENTRIES,
@@ -424,6 +426,15 @@ export type ProviderSessionListener = {
   // listeners above because historical sessions may have no local process. Every active local CLI
   // adapter calls it at most once, immediately after spawn, not on every streamed event.
   onProcessStarted?: (pid: number) => void;
+  /**
+   * One action the provider reported taking. Optional like `onAllowance` and `onProcessStarted`:
+   * an adapter that cannot describe its own actions stays correct by not calling it.
+   *
+   * Runs inside the adapter's stdout handler, where `runProcess` wraps every listener in a guard
+   * that kills the child and fails the session on a throw. An implementation MUST NOT throw:
+   * losing the diagnostic is correct, killing the run it was diagnosing is not.
+   */
+  onActivity?: (entry: ProviderActivityEntry) => void;
 };
 
 // The one failure `start` can report that Loomrail knows how to act on by itself (spec §7): the
