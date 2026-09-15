@@ -9,10 +9,12 @@ import { startDaemon, type RunningDaemon } from "./provider-test-daemon.js";
 
 /**
  * Task 11: the browser-level proof that the Run Activity section (Tasks 9-10) behaves the way an
- * owner actually experiences it -- entries arriving live over the event channel (Tasks 1-6), never
- * reloaded for; the section starting collapsed and opening only on the owner's own click; and one
- * daemon-audited workspace action rendered exactly once across the whole Cockpit, never duplicated
- * into the Activity timeline the way review round 1 found it.
+ * owner actually experiences it -- an already-rendered entry list growing because a signal arrived
+ * over the event channel (Tasks 1-6), never reloaded for and never merely a fresh query's own first
+ * fetch (review round 1's finding: an earlier version of this test proved only that); the section
+ * starting collapsed and opening only on the owner's own click; and one daemon-audited workspace
+ * action rendered exactly once across the whole Cockpit, never duplicated into the Activity timeline
+ * the way review round 1 also found.
  *
  * New file rather than an addition to walking-skeleton.spec.ts or event-channel.spec.ts, for the
  * same reason Task 9's own event-channel.spec.ts gave (task-9-brief decision #4): a concurrent
@@ -124,98 +126,135 @@ const readyForBudgetApproval = async (page: Page, inspector: Locator): Promise<L
   return workflowSection;
 };
 
+/** The text of the second, PROVIDER_REPORTED entry -- see `runActivityAdapter` below. */
+const SECOND_ACTIVITY_TEXT = "Reviewing the audited write before handing off.";
+
 /**
  * Scripted like `provider-double.ts`'s own DISCOVERY/IMPLEMENT-attempt-1 shape (so the shared
  * `readyForBudgetApproval` helper above still applies unmodified), but IMPLEMENT's retry performs
  * one REAL audited write through the bounded workspace-tool gateway (`invocation.workspaceTools`,
- * the same seam `review-loop.spec.ts`'s adapter uses) and then pauses with its own NEEDS_HUMAN
- * instead of chaining straight through REVIEW/QA/ACCEPTANCE.
+ * the same seam `review-loop.spec.ts`'s adapter uses), then -- once the test releases the returned
+ * gate -- reports a SECOND, PROVIDER_REPORTED action directly through `listener.onActivity` before
+ * pausing with its own NEEDS_HUMAN instead of chaining straight through REVIEW/QA/ACCEPTANCE.
  *
- * That pause is load-bearing, not incidental: `RunActivitySection` reads the WorkItem's *current*
- * stage attempt (spec: mirrors `AttemptSessionsPanel`), and the scripted double's usual REVIEW ->
- * QA -> ACCEPTANCE chain resolves synchronously -- fast enough that by the time an assertion could
- * observe IMPLEMENT's own AgentRun, `currentStageAttemptId` would already have moved to ACCEPTANCE's
- * fresh, empty one. Pausing keeps IMPLEMENT "current" for exactly as long as this test needs it to be.
+ * The gate is what makes this a real append-to-an-already-rendered-list proof rather than a
+ * new-query's-first-fetch proof: review round 1 found that reporting both actions up front only
+ * proves a freshly mounted query's first fetch already has the data (true regardless of the event
+ * channel, since React Query fetches an `enabled` query on mount with no invalidation involved) --
+ * never the live-update path an OWNER actually watches for, where an already-fetched list grows
+ * because a signal arrived. Releasing the gate only after the test has confirmed the first entry is
+ * on screen forces the second one to depend on that live path -- and a PROVIDER_REPORTED entry
+ * specifically, because it appends no domain Event (unlike the audited write's
+ * WORKSPACE_TOOL_CALL_CHANGED) and therefore depends solely on session-loop.ts's own direct
+ * `publishActivitySignal`, not on `broadcastingState`'s generic per-Event publish.
+ *
+ * The pause after both actions is load-bearing, not incidental: `RunActivitySection` reads the
+ * WorkItem's *current* stage attempt (spec: mirrors `AttemptSessionsPanel`), and the scripted
+ * double's usual REVIEW -> QA -> ACCEPTANCE chain resolves synchronously -- fast enough that by the
+ * time an assertion could observe IMPLEMENT's own AgentRun, `currentStageAttemptId` would already
+ * have moved to ACCEPTANCE's fresh, empty one. Pausing keeps IMPLEMENT "current" for exactly as long
+ * as this test needs it to be.
  */
-const runActivityAdapter = (): ProviderAdapter => ({
-  capabilities: () => ({
-    provider: "CODEX",
-    start: true,
-    interrupt: true,
-    eventStream: false,
-    usageReporting: false,
-    contextWindowReporting: false,
-    checkpointOnRequest: false,
-    contextWindowTokens: 128_000,
-    stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-    costReporting: false,
-    tokenBudgetEnforcement: "HARD",
-  }),
-  start: async (invocation) => {
-    const { stage, attempt } = invocation.session;
-    if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
-      return {
-        type: "NEEDS_HUMAN",
-        request: {
-          kind: "SINGLE_CHOICE",
-          blocking: true,
-          title: "Choose the discovery depth",
-          context: "The test delivery pipeline needs one product decision before planning.",
-          recommendation: "Use the focused pass for a bounded task.",
-          options: [
-            {
-              id: "focused-pass",
-              label: "Focused pass",
-              consequence: "Proceed with the smallest sufficient plan.",
-              recommended: true,
-            },
-            {
-              id: "extended-pass",
-              label: "Extended pass",
-              consequence: "Map additional constraints and edge cases.",
-              recommended: false,
-            },
-          ],
-          allowOther: true,
-        },
-      };
-    }
-    if (stage === "IMPLEMENT" && attempt === 1) {
-      return { type: "BUDGET_LIMIT_REACHED", usageIncrements: [50, 30, 15, 5], quality: "LOOMRAIL_ESTIMATE" };
-    }
-    if (stage === "IMPLEMENT") {
-      if (invocation.workspaceTools === undefined) throw new Error("IMPLEMENT has no workspace tools");
-      const effect = await invocation.workspaceTools.execute(
-        {
-          callId: `${invocation.session.id}-run-activity-write`,
-          operation: "WRITE_FILE",
-          path: "run-activity-effect.txt",
-          expectedSha256: null,
-          content: "Audited implementation effect for the Run Activity E2E canary.\n",
-        },
-        invocation.authoritySignal,
-      );
-      if (effect.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${effect.code}`);
-      return {
-        type: "NEEDS_HUMAN",
-        request: {
-          kind: "SINGLE_CHOICE",
-          blocking: true,
-          title: "Confirm before REVIEW",
-          context: "Pausing here on purpose so the write above stays the current AgentRun's activity.",
-          recommendation: "Continue once the observation is done.",
-          options: [
-            { id: "continue", label: "Continue", consequence: "Move on to REVIEW.", recommended: true },
-          ],
-          allowOther: true,
-        },
-      };
-    }
-    return { type: "COMPLETED", summary: `${stage} completed for the run activity E2E.` };
-  },
-  requestHandoff: () => Promise.resolve(),
-  abortSession: () => Promise.resolve(),
-});
+const runActivityAdapter = (): { adapter: ProviderAdapter; releaseSecondActivity: () => void } => {
+  let release: () => void = () => undefined;
+  const secondActivityGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const adapter: ProviderAdapter = {
+    capabilities: () => ({
+      provider: "CODEX",
+      start: true,
+      interrupt: true,
+      eventStream: false,
+      usageReporting: false,
+      contextWindowReporting: false,
+      checkpointOnRequest: false,
+      contextWindowTokens: 128_000,
+      stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+      costReporting: false,
+      tokenBudgetEnforcement: "HARD",
+    }),
+    start: async (invocation, listener) => {
+      const { stage, attempt } = invocation.session;
+      if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+        return {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "SINGLE_CHOICE",
+            blocking: true,
+            title: "Choose the discovery depth",
+            context: "The test delivery pipeline needs one product decision before planning.",
+            recommendation: "Use the focused pass for a bounded task.",
+            options: [
+              {
+                id: "focused-pass",
+                label: "Focused pass",
+                consequence: "Proceed with the smallest sufficient plan.",
+                recommended: true,
+              },
+              {
+                id: "extended-pass",
+                label: "Extended pass",
+                consequence: "Map additional constraints and edge cases.",
+                recommended: false,
+              },
+            ],
+            allowOther: true,
+          },
+        };
+      }
+      if (stage === "IMPLEMENT" && attempt === 1) {
+        return {
+          type: "BUDGET_LIMIT_REACHED",
+          usageIncrements: [50, 30, 15, 5],
+          quality: "LOOMRAIL_ESTIMATE",
+        };
+      }
+      if (stage === "IMPLEMENT") {
+        if (invocation.workspaceTools === undefined) throw new Error("IMPLEMENT has no workspace tools");
+        const effect = await invocation.workspaceTools.execute(
+          {
+            callId: `${invocation.session.id}-run-activity-write`,
+            operation: "WRITE_FILE",
+            path: "run-activity-effect.txt",
+            expectedSha256: null,
+            content: "Audited implementation effect for the Run Activity E2E canary.\n",
+          },
+          invocation.authoritySignal,
+        );
+        if (effect.status !== "SUCCEEDED") throw new Error(`IMPLEMENT tool failed: ${effect.code}`);
+        await secondActivityGate;
+        listener.onActivity?.({
+          actionKey: `${invocation.session.id}-run-activity-note`,
+          kind: "AGENT_TEXT",
+          label: null,
+          detail: SECOND_ACTIVITY_TEXT,
+          status: null,
+          terminal: true,
+          truncated: false,
+        });
+        return {
+          type: "NEEDS_HUMAN",
+          request: {
+            kind: "SINGLE_CHOICE",
+            blocking: true,
+            title: "Confirm before REVIEW",
+            context: "Pausing here on purpose so both actions above stay the current AgentRun's activity.",
+            recommendation: "Continue once the observation is done.",
+            options: [
+              { id: "continue", label: "Continue", consequence: "Move on to REVIEW.", recommended: true },
+            ],
+            allowOther: true,
+          },
+        };
+      }
+      return { type: "COMPLETED", summary: `${stage} completed for the run activity E2E.` };
+    },
+    requestHandoff: () => Promise.resolve(),
+    abortSession: () => Promise.resolve(),
+  };
+  return { adapter, releaseSecondActivity: release };
+};
 
 test.describe("run activity", () => {
   // Spec docs/plans/127-agent-run-activity-implementation-plan.ru.md, Task 11: one run, observed the
@@ -227,7 +266,8 @@ test.describe("run activity", () => {
     context,
   }) => {
     const title = "Run activity live update";
-    const actorInspector = await openWorkbench(page, title, runActivityAdapter());
+    const { adapter, releaseSecondActivity } = runActivityAdapter();
+    const actorInspector = await openWorkbench(page, title, adapter);
     await readyForBudgetApproval(page, actorInspector);
 
     const observerPage = await context.newPage();
@@ -262,6 +302,21 @@ test.describe("run activity", () => {
     await expect(entryList.getByText("Write file", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(entryList.getByText("Verified by Loomrail", { exact: true })).toBeVisible();
     await expect(entryList.locator(".run-activity__entry")).toHaveCount(1);
+
+    // The append path: the entry list above is already fetched and rendered with one row. Releasing
+    // the adapter's gate now makes it report a SECOND, PROVIDER_REPORTED action -- through
+    // `listener.onActivity`, the same seam a real provider CLI's stdout handler uses, which appends
+    // no domain Event and so cannot ride `broadcastingState`'s per-Event publish the first entry did.
+    // Nothing is clicked, navigated, or reloaded on this page for this to appear: only
+    // `session-loop.ts`'s own direct `publishActivitySignal` -> the event channel -> React Query's
+    // invalidation of this already-mounted query can grow the list from 1 to 2. A query's very first
+    // fetch (review round 1's finding: what the earlier version of this test actually proved, since a
+    // freshly mounted query fetches on enablement with no invalidation involved at all) cannot be
+    // mistaken for this, because there is no second mount here -- the same query grows in place.
+    releaseSecondActivity();
+    await expect(entryList.locator(".run-activity__entry")).toHaveCount(2, { timeout: 10_000 });
+    await expect(entryList.getByText(SECOND_ACTIVITY_TEXT, { exact: true })).toBeVisible();
+    await expect(entryList.getByText("As reported by the provider", { exact: true })).toBeVisible();
 
     // Exactly once IN THE LIST (task-11-brief): review round 1 found the very same audited action
     // rendered a second time, in a second vocabulary, in the Activity timeline.
