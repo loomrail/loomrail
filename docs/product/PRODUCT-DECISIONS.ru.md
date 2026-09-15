@@ -371,6 +371,10 @@ Tasks, events, decisions, usage summaries и handoffs сохраняются б�
 screenshots, traces и временные builds по умолчанию удаляются через 30 дней после закрытия работы. Очистка не
 затрагивает Git.
 
+> Известный разрыв реализации, не изменение этого решения: свёртка по возрасту сегодня не применяется к таблице
+> `agent_run_activity` — ленте Run Activity уровня 1. Её ограничивает только предел в 1 000 записей на прогон с
+> вытеснением самых ранних. См. [ADR-0034](../adr/0034-diagnostic-provider-activity.md).
+
 ### SD-005 — Public-alpha reporting требует preview и одноразового действия владельца
 
 Local Insights вычисляются по запросу из aggregate counts и остаются внутри authenticated loopback session. Public

@@ -13,13 +13,16 @@ bounded target, digests and typed outcome, and never stores file contents, comma
 payload. It is deliberately narrow: it says what Loomrail permitted and performed, in Loomrail's own closed
 vocabulary.
 
-Both local CLIs also narrate their own actions on stdout, and neither adapter took anything from that
-narration. For Codex the rationale is written down and still in the code: `packages/provider-codex/src/stream.ts`
-folds every such line into a payload-free `item.ignored` case whose comment says the event carries no payload
-deliberately, because Loomrail's account of what a session changed comes from `git diff` against the worktree,
-and modelling the provider's own `file_change.changes[]` would stand up a second, weaker source for a fact that
-already has a strong one. The Claude Code adapter exposed only the terminal `result` event, and dropped every
-`system` event outright because hook events carry stdout and stderr captured on the owner's machine (SD-003).
+Both local CLIs also narrate their own actions on stdout, and almost none of that narration was taken. The
+exception was Codex's `agent_message`, which the outcome parser already surfaced — but only as the carrier of the
+stage's structured result, never as a description of anything the agent did. The actions themselves were
+discarded, and for Codex the rationale is written down and still in the code:
+`packages/provider-codex/src/stream.ts` folds every `command_execution` and `file_change` line into a
+payload-free `item.ignored` case whose comment says the event carries no payload deliberately, because Loomrail's
+account of what a session changed comes from `git diff` against the worktree, and modelling the provider's own
+`file_change.changes[]` would stand up a second, weaker source for a fact that already has a strong one. The
+Claude Code adapter exposed only the terminal `result` event, and dropped every `system` event outright because
+hook events carry stdout and stderr captured on the owner's machine (SD-003).
 
 That reasoning is correct and is not being reversed. It answers the question "what changed", and the answer
 stays `git diff`, measured verification and domain-owned Acceptance. It does not answer a different question
@@ -71,7 +74,8 @@ Each entry carries `actionKey`, `kind`, `label` (at most 500 characters), `detai
 - Codex `command_execution` becomes a `TOOL_CALL` labelled with the command, with the exit code as status;
   `aggregated_output` is not read.
 - Codex `file_change` becomes a `FILE_CHANGE` carrying paths only, never the content of a change.
-- Codex `agent_message` becomes `AGENT_TEXT`.
+- Codex `agent_message` becomes `AGENT_TEXT`. This is the one line the outcome parser also reads, for a
+  structured result; the two parsers read it independently and neither can affect the other.
 - Claude Code `tool_use` becomes a `TOOL_CALL` labelled with the tool name, with at most one target value
   looked up by tool name from a closed table (`command`, `file_path`, `pattern`). The argument object is never
   serialized, so provider-supplied file content cannot ride in by construction rather than by filtering.
@@ -198,9 +202,10 @@ nothing interprets it as Markdown, HTML or a link.
   describes for unpinned diagnostic data is not wired to this table, so a long-lived database keeps up to
   1,000 entries per AgentRun indefinitely.
 - Every recorded entry costs one receipt row in the append-only `commands` table, and an action that reports
-  twice costs two. This is an accepted known limit, not an oversight: `WORKSPACE_TOOL_CALL_CHANGED` already
-  writes one command per action, so the property exists in this code without the feed, and removing it needs
-  retention over `commands`, which changes the idempotent-replay guarantee and deserves its own specification.
+  twice costs two. This is an accepted known limit, not an oversight: an audited workspace tool call already
+  writes two commands of its own — `START_WORKSPACE_TOOL_CALL` and `FINISH_WORKSPACE_TOOL_CALL`, one receipt
+  each — so the property exists in this code without the feed, and removing it needs retention over `commands`,
+  which changes the idempotent-replay guarantee and deserves its own specification.
   Heavy local use grows the database faster than it otherwise would.
 - `degraded` is what the owner sees instead of a quietly short feed. It means the recorder knows this run's
   feed is incomplete — it overflowed, a write failed, the recorder threw, or the daemon died mid-run — and it
