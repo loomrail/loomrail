@@ -1378,6 +1378,12 @@ const en = {
   "runActivity.kind.AGENT_TEXT": "Agent note",
   "runActivity.kind.FILE_CHANGE": "File change",
   "runActivity.kind.PROVIDER_ERROR": "Provider error",
+  // The group heading's ordinal (fix round 2): names `agent_runs.ordinal` honestly rather than
+  // borrowing "Session {ordinal}" (workflow.sessions.ordinal, which names a different counter,
+  // `provider_sessions.ordinal` -- the two diverge after a context handoff) or "Attempt {attempt}"
+  // (workflow.sessions.attemptHeading, which names `stage_attempts.attempt`, scoped per stage, not
+  // per AgentRun within one attempt). See RunActivitySection.tsx's own comment beside its use.
+  "runActivity.group.ordinal": "Run {ordinal}",
   "runActivity.count": "{count}",
   "runActivity.countMore": "{count}+",
   "runActivity.loading": "Loading run activity…",
@@ -2777,6 +2783,7 @@ const ru = {
   "runActivity.kind.AGENT_TEXT": "Заметка агента",
   "runActivity.kind.FILE_CHANGE": "Изменение файла",
   "runActivity.kind.PROVIDER_ERROR": "Ошибка провайдера",
+  "runActivity.group.ordinal": "Прогон {ordinal}",
   "runActivity.count": "{count}",
   "runActivity.countMore": "{count}+",
   "runActivity.loading": "Загружаем действия агента…",

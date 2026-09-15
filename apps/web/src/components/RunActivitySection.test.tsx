@@ -1,14 +1,34 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunActivityEntry } from "@loomrail/contracts";
+import type { AgentRunActivityEntry, WorkItem } from "@loomrail/contracts";
 
 import { I18nProvider } from "../i18n";
-import { RunActivityView } from "./RunActivitySection";
+import { RunActivitySection, RunActivityView } from "./RunActivitySection";
 
 // @testing-library/react is not a dependency of apps/web -- this follows the repository's own
 // idiom (see components/ProjectVerificationPanel.test.tsx and views/AgentFleetPage.test.tsx) of
 // rendering the pure, props-driven View with renderToStaticMarkup and asserting on the resulting
 // HTML string.
+//
+// The CONTAINER (`RunActivitySection`, below) is covered too, following
+// HumanRequestAnswerForm.test.tsx's own idiom for a component that calls live hooks: mock
+// "../workspace" wholesale (`vi.mock`, hoisted -- needs no `@testing-library/react` either) so
+// `renderToStaticMarkup` can render the real container, not just the pure view. This is what fix
+// round 2 uses to cover the "never started" gate directly, after round 1 left it verified only by
+// a live e2e run and reported the gap.
+vi.mock("../workspace", () => ({
+  useAgentFleet: () => ({ data: { entries: [] } }),
+  useWorkItemActivity: () => ({
+    data: undefined,
+    error: null,
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isError: false,
+    isFetchingNextPage: false,
+    isPending: true,
+    refetch: vi.fn(),
+  }),
+}));
 
 const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivityEntry => ({
   id: "activity-1",
@@ -25,6 +45,27 @@ const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivity
   agentRunId: "run-1",
   stage: "IMPLEMENT",
   ordinal: 1,
+  ...overrides,
+});
+
+// Matches boardView.test.ts's own `workItem` fixture shape. Only `currentStage` varies between the
+// two RunActivitySection container tests below -- everything else is filler a real WorkItem needs
+// to satisfy the type, not a fact either test depends on.
+const workItem = (overrides: Partial<WorkItem> & Pick<WorkItem, "id">): WorkItem => ({
+  schemaVersion: 1,
+  projectId: "project-1",
+  parentId: null,
+  type: "TASK",
+  title: "Task",
+  description: "",
+  state: "READY",
+  currentStage: null,
+  priority: "MEDIUM",
+  risk: "MEDIUM",
+  acceptanceCriteria: [],
+  version: 1,
+  createdAt: "2026-08-01T00:00:00.000Z",
+  updatedAt: "2026-08-01T00:00:00.000Z",
   ...overrides,
 });
 
@@ -98,10 +139,10 @@ describe("RunActivityView", () => {
   // is "one group per run, headed by that run's own stage and its OWN backend ordinal (not a
   // position-based count)", not merely "every entry renders somewhere". Non-sequential ordinals (3
   // and 7, not 1 and 2) are load-bearing: a mutant that numbered groups by their position instead of
-  // reading `entry.ordinal` would print "Session 1"/"Session 2" here and still pass a fixture that
-  // happened to use sequential ordinals. A mutant that labelled every group with the FIRST entry's
-  // stage (instead of each group's own) would still pass every other test in this file but fails
-  // this one, because "Review" would never appear at all.
+  // reading `entry.ordinal` would print "Run 1"/"Run 2" here and still pass a fixture that happened
+  // to use sequential ordinals. A mutant that labelled every group with the FIRST entry's stage
+  // (instead of each group's own) would still pass every other test in this file but fails this
+  // one, because "Review" would never appear at all.
   it("groups consecutive entries by run, each group named by its own run's stage and backend ordinal", () => {
     const html = renderView({
       entries: [
@@ -120,10 +161,10 @@ describe("RunActivityView", () => {
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(2);
-    expect(html).toContain("Session 3");
-    expect(html).toContain("Session 7");
-    expect(html).not.toContain("Session 1");
-    expect(html).not.toContain("Session 2");
+    expect(html).toContain("Run 3");
+    expect(html).toContain("Run 7");
+    expect(html).not.toContain("Run 1");
+    expect(html).not.toContain("Run 2");
     // Scoped to the expanded entry LIST, not the collapsed summary above it -- the summary
     // legitimately previews the task's latest action (here, also "List directory") ahead of the
     // list, for an unrelated reason (see the "collapses to the latest action" tests below).
@@ -144,10 +185,10 @@ describe("RunActivityView", () => {
 
   // The spec's grouping rule is "consecutive entries sharing an agentRunId", not "every entry
   // sharing an agentRunId, wherever it appears". A naive `groupBy(agentRunId)` implementation would
-  // fuse the two run-1 spans below back into one group and print "Session 5" once; this fixture can
+  // fuse the two run-1 spans below back into one group and print "Run 5" once; this fixture can
   // only pass if the grouping walks the list in order and starts a new group the moment run-2's
   // entry interrupts run-1's own run. The ordinal itself is simply read off each entry (fix round 1:
-  // no longer computed), so both run-1 groups trivially show the same "Session 5" -- proven here by
+  // no longer computed), so both run-1 groups trivially show the same "Run 5" -- proven here by
   // counting its occurrences rather than assuming it.
   it("starts a new group when the same run's entries are not consecutive, and both groups still show that run's own ordinal", () => {
     const html = renderView({
@@ -167,8 +208,8 @@ describe("RunActivityView", () => {
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(3);
-    expect((html.match(/Session 5/g) ?? []).length).toBe(2);
-    expect((html.match(/Session 2/g) ?? []).length).toBe(1);
+    expect((html.match(/Run 5/g) ?? []).length).toBe(2);
+    expect((html.match(/Run 2/g) ?? []).length).toBe(1);
   });
 
   // "Свёрнутая сводка показывает последнее действие по задаче" -- across the whole task, not just
@@ -409,5 +450,41 @@ describe("RunActivityView", () => {
     // next to a recovery panel explaining that the read itself failed.
     expect(html).not.toContain('class="inspector-copy"');
     expect(html).not.toContain("run-activity__entries");
+  });
+});
+
+// Fix round 2: the container's own gate (`if (!hasStartedWorkflow(item)) return null;`) had no
+// automated test -- `hasStartedWorkflow` itself was covered in runActivityPaging.test.ts, but the
+// one line wiring it into the component was not, which is exactly how the gate was removed
+// entirely once already without a red test catching it (fix round 1). Rendering the real container
+// through the `vi.mock("../workspace", ...)` at the top of this file closes that gap without
+// `@testing-library/react`.
+describe("RunActivitySection", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-US" });
+  });
+
+  it("renders nothing for a WorkItem that has never started its workflow", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <RunActivitySection item={workItem({ id: "item-1", currentStage: null })} />
+      </I18nProvider>,
+    );
+
+    // Not just "no Run Activity text" -- the container returns null, so nothing renders at all,
+    // the same way `AttemptSessionsPanel` in WorkbenchPage.tsx renders nothing for its own
+    // "no sessions yet" case rather than an empty card.
+    expect(html).toBe("");
+  });
+
+  it("renders the section once the WorkItem has started its workflow, mocked hooks or not", () => {
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <RunActivitySection item={workItem({ id: "item-1", currentStage: "IMPLEMENT" })} />
+      </I18nProvider>,
+    );
+
+    expect(html).toContain("Run Activity");
   });
 });

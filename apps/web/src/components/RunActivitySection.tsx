@@ -173,12 +173,14 @@ type OpenRunActivityGroup = Omit<RunActivityGroup, "entries"> & { entries: Agent
  *
  * `ordinal` is read straight off the entry (`agent_runs.ordinal`, resolved once per run by the
  * daemon -- apps/daemon/src/agent-run-activity.ts), not computed here: fix round 1 on Task 3
- * replaced an earlier, client-computed "first appearance in this page" count after review found it
- * could disagree with the number the Workflow panel already shows for the very same AgentRun
- * ("Session N", from that run's own ProviderSession -- the two are kept in sync at the daemon,
- * `provider_sessions.agent_run_id`/`ordinal`). Reading it off the entry, instead of recomputing it,
- * is also what keeps a run's two groups (the non-consecutive case above) trivially showing the same
- * number: they share the same underlying field, not a separately tracked counter that could drift.
+ * replaced an earlier, client-computed "first appearance in this page" count with this, the run's
+ * real backend ordinal. Fix round 2 then corrected WHICH label names it -- `agent_runs.ordinal`
+ * looked interchangeable with the Workflow panel's "Session N" (`provider_sessions.ordinal`), but
+ * the two diverge the moment a context handoff starts a second ProviderSession under the same
+ * still-running AgentRun (see `RunActivityGroupSection` below for why neither existing panel label
+ * fits). Reading `ordinal` off the entry, instead of recomputing it, is also what keeps a run's two
+ * groups (the non-consecutive case above) trivially showing the same number: they share the same
+ * underlying field, not a separately tracked counter that could drift.
  */
 const groupEntriesByRun = (entries: readonly AgentRunActivityEntry[]): readonly RunActivityGroup[] => {
   const groups: OpenRunActivityGroup[] = [];
@@ -213,11 +215,17 @@ const RunActivityGroupSection = ({
         tab stop. */}
     <div className="run-activity__group-heading">
       <span className="run-activity__group-stage">{t(stageKey(group.stage))}</span>
-      {/* Reuses the Workflow panel's own "Session N" label (workflow.sessions.ordinal) for this
-          run's ordinal, rather than a Run-Activity-specific wording -- one run must carry one
-          number everywhere, not "Session 2" in one panel and something else here. */}
+      {/* Fix round 2: NOT workflow.sessions.ordinal ("Session N"). That labels
+          `provider_sessions.ordinal`, a different counter from `agent_runs.ordinal` (this
+          group's own `ordinal`) -- both are `UNIQUE (stage_attempt_id, ordinal)`, but they diverge
+          the moment a context handoff starts a second ProviderSession under the same still-running
+          AgentRun, so a group headed "Session 1" could cover entries the Workflow panel attributes
+          to Session 2. Also not workflow.sessions.attemptHeading ("Attempt N"): that labels
+          `stage_attempts.attempt`, scoped per STAGE (`UNIQUE (pipeline_run_id, stage, attempt)`),
+          not per AgentRun within one attempt. Neither panel has a label for this exact number, so
+          this is its own key, naming what it actually is instead of borrowing a wrong one. */}
       <span className="run-activity__group-ordinal">
-        {t("workflow.sessions.ordinal", { ordinal: group.ordinal })}
+        {t("runActivity.group.ordinal", { ordinal: group.ordinal })}
       </span>
     </div>
     <ol className="run-activity__group-entries">
