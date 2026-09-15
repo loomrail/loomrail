@@ -2492,8 +2492,9 @@ Required controls:
 - **Untrusted text stays inert.** Provider `label`/`detail`/`status` are rendered as React text nodes, never as
   Markdown, HTML or links, in both the Cockpit section and the Fleet column; only the closed
   `workspaceTool.*` codes of audited rows are used as translation keys.
-- **Bounded surface and inputs.** `GET /api/v1/agent-runs/:runId/activity` is `requireSession`-gated on the
-  loopback daemon, scoped by AgentRun existence, and answers `cache-control: no-store` plus
+- **Bounded surface and inputs.** `GET /api/v1/work-items/:workItemId/activity` is `requireSession`-gated on
+  the loopback daemon, scoped by WorkItem existence (spec 128 replaced the AgentRun-scoped route this feed
+  first shipped with, and deleted it), and answers `cache-control: no-store` plus
   `x-content-type-options: nosniff` with at most 200 entries. The cursor is opaque and re-parsed through a strict
   schema; a forged or malformed one is refused, never used as a query parameter, and a cursor naming a pruned
   position restarts the page with an explicit `gap`. Recording is guarded by a SYSTEM/session-loop actor check.
@@ -2548,8 +2549,9 @@ Required verification, all present:
 
 Residual risk: the feed is untrusted text the owner reads, and a provider can fill it with plausible but false
 claims about its own work; it is labelled as such and proves nothing. It is also incomplete by construction —
-eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and only the
-first three of those set `degraded`. Every recorded entry costs one row in the append-only `commands` receipt
+eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and of those
+only the bounded queue sets `degraded`: eviction is surfaced separately as the run's `omittedCount`, while a
+contract-invalid entry and an entry reported after the session closed are dropped without setting either. Every recorded entry costs one row in the append-only `commands` receipt
 table, which has no retention. The activity table itself is now aged out by `cleanupExpiredAgentRunActivity`
 (`apps/daemon/src/agent-run-activity-retention.ts`, SD-004): at daemon startup, `agent_run_activity` rows — and
 the `agent_run_activity_state` counters row a run's last entry leaves behind — are deleted once their AgentRun's
