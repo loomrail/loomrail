@@ -342,6 +342,38 @@ describe("agent run activity retention", () => {
     expect(readState(localState, fixture.agentRunId)).toMatchObject({ entries: 1 });
   });
 
+  // fix-round-2: the previous test covers `agent_run_activity` rows for a completed-but-unaccepted
+  // WorkItem; this one covers the *other* half of the sweep -- an `agent_run_activity_state` row
+  // with zero entries, for a run whose recorder never wrote anything (MARK_AGENT_RUN_ACTIVITY_DEGRADED
+  // only, same as the still-closed orphan test above) but whose WorkItem is completed-but-unaccepted
+  // rather than closed. The closure-Event join alone would let this row through -- only
+  // `deleteExpiredAgentRunActivityState`'s own `work_items.state IN ('DONE','CANCELLED')` clause
+  // protects it, and that clause had no test isolating it from the join.
+  it("does not sweep a still-open work item's orphaned state row, however old, when it is completed but unaccepted", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState);
+    markDegraded(localState, fixture);
+    expect(readState(localState, fixture.agentRunId)).toEqual({
+      entries: 0,
+      omittedCount: 0,
+      degraded: true,
+    });
+    const completedAt = completeStageWithoutClosingWorkItem(localState, fixture);
+
+    const workItem = localState.query({ type: "GET_WORK_ITEM", workItemId: fixture.workItemId });
+    if (workItem.type !== "WORK_ITEM" || workItem.workItem === null) throw new Error("Expected the WorkItem");
+    expect(workItem.workItem.state).toBe("IN_PROGRESS");
+
+    const afterCompletion = new Date(new Date(completedAt).getTime() + 1).toISOString();
+    expect(listExpired(localState, afterCompletion)).toEqual([]);
+    expect(sweep(localState, afterCompletion)).toEqual({ entriesDeleted: 0, stateRowsDeleted: 0 });
+    expect(readState(localState, fixture.agentRunId)).toEqual({
+      entries: 0,
+      omittedCount: 0,
+      degraded: true,
+    });
+  });
+
   it("does not select activity for a work item closed within the retention window", async () => {
     const localState = await open();
     const fixture = startExecution(localState);
