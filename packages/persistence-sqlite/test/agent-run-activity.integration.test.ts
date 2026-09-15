@@ -1283,6 +1283,17 @@ describe("work item activity", () => {
   // amounts (1 and 2) specifically so their sum (3) cannot be produced by a wrong aggregation that
   // picks one run's count, or takes the larger of the two (`MAX`) instead of summing -- either of
   // those bugs would read back 1 or 2, never 3.
+  //
+  // The *later* (PLAN) run, not the temporally-first one, is the one marked degraded. That is
+  // deliberate, not arbitrary: a fix-round review found that marking the first-created run left
+  // this test unable to tell `COALESCE(MAX(state.degraded), 0)` apart from the un-aggregated
+  // `COALESCE(state.degraded, 0)` -- a bug that drops the OR-across-runs semantics and just reads
+  // one arbitrary row's column. SQLite's query plan for that bug happened to surface the
+  // first-created run's value here, so a fixture that only ever degrades the first run cannot
+  // distinguish the two implementations. Degrading the later run instead means a "some arbitrary
+  // row" implementation reads back `false` (or the wrong run's status) rather than `true`. See the
+  // dedicated "regardless of which run degraded" test below for the same property proven cheaply,
+  // in both directions, without the 1_000+ row eviction cost this test pays for the sum.
   it("aggregates omittedCount and degraded across the task's runs", async () => {
     const localState = await open();
     const execution = startWorkItemExecution(localState, "p1");
@@ -1306,14 +1317,94 @@ describe("work item activity", () => {
     for (let index = 0; index < 1_002; index += 1) {
       localState.execute(recordActivity(secondRun, `d${index.toString()}`, "Repeated plan action"));
     }
-    // Only the first (DISCOVERY) run is marked degraded -- proving `degraded` is true for the
-    // WorkItem even though the run holding the newer, larger omittedCount contribution never
-    // degraded itself.
-    localState.execute(markDegraded(execution.run.agentRunId, "mark-degraded-discovery-run"));
+    localState.execute(markDegraded(secondRun.agentRunId, "mark-degraded-plan-run"));
 
     const page = readWorkItemActivity(localState, execution.workItemId, 2_000);
     expect(page.omittedCount).toBe(3);
     expect(page.degraded).toBe(true);
+  });
+
+  // Cheap complement to the omittedCount-summing test above: proves `degraded` is a true
+  // disjunction across every run of the task -- not a read of one arbitrary run's column -- in
+  // BOTH directions, so neither "always reads the first-created run" nor "always reads the
+  // last-created run" can pass.
+  //
+  // Both runs of each WorkItem below are given their own `recordActivity` call before either is
+  // marked, specifically so BOTH carry an `agent_run_activity_state` row and the aggregation's join
+  // genuinely has two contending rows to pick from. Skipping that step (as an earlier version of
+  // this test did) leaves the non-degraded run with no counters row at all -- the join then has
+  // only one row per WorkItem, which a "reads one arbitrary row" implementation satisfies exactly
+  // as well as a real `MAX`, so the test cannot tell them apart. Confirmed against the reviewer's
+  // exact `COALESCE(MAX(state.degraded), 0)` -> `COALESCE(state.degraded, 0)` mutation: without
+  // this fix that mutation passed every test in the file; with it, this test fails.
+  it("flags the task degraded regardless of which run degraded", async () => {
+    const localState = await open();
+
+    const earlierDegraded = startWorkItemExecution(localState, "p1");
+    const earlierNextStage = advanceToNextStage(
+      localState,
+      "p1",
+      earlierDegraded.dispatchId,
+      earlierDegraded.run,
+      earlierDegraded.workItemId,
+    );
+    const earlierSecondRun = startAgentRunAndSession(
+      localState,
+      "p1",
+      "plan",
+      earlierNextStage.dispatchId,
+      earlierNextStage.stageAttemptId,
+    );
+    localState.execute(recordActivity(earlierDegraded.run, "c1", "Discovery action"));
+    localState.execute(recordActivity(earlierSecondRun, "d1", "Plan action"));
+    localState.execute(markDegraded(earlierDegraded.run.agentRunId, "mark-degraded-earlier-p1"));
+    expect(readWorkItemActivity(localState, earlierDegraded.workItemId).degraded).toBe(true);
+
+    const laterDegraded = startWorkItemExecution(localState, "p2");
+    const laterNextStage = advanceToNextStage(
+      localState,
+      "p2",
+      laterDegraded.dispatchId,
+      laterDegraded.run,
+      laterDegraded.workItemId,
+    );
+    const laterSecondRun = startAgentRunAndSession(
+      localState,
+      "p2",
+      "plan",
+      laterNextStage.dispatchId,
+      laterNextStage.stageAttemptId,
+    );
+    localState.execute(recordActivity(laterDegraded.run, "c1", "Discovery action"));
+    localState.execute(recordActivity(laterSecondRun, "d1", "Plan action"));
+    localState.execute(markDegraded(laterSecondRun.agentRunId, "mark-degraded-later-p2"));
+    expect(readWorkItemActivity(localState, laterDegraded.workItemId).degraded).toBe(true);
+  });
+
+  // Fix round 1: the aggregation query's own `WHERE agent_runs.work_item_id = ?` had zero
+  // coverage -- every prior test in this suite that checks `omittedCount`/`degraded` only ever
+  // opens ONE WorkItem whose runs have those values, so a mutation that folds every WorkItem's
+  // runs into the aggregate (`... OR 1 = 1`) produced the exact same result and every test still
+  // passed. This test opens two WorkItems and gives the noisy one nonzero contributions on both
+  // axes specifically so a leaked aggregation is visible on the quiet one.
+  it("does not leak another task's aggregation into this task's omittedCount and degraded", async () => {
+    const localState = await open();
+    const quiet = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(quiet.run, "c1", "Quiet task action"));
+
+    const noisy = startWorkItemExecution(localState, "p2");
+    for (let index = 0; index < 1_001; index += 1) {
+      localState.execute(recordActivity(noisy.run, `n${index.toString()}`, "Noisy repeated action"));
+    }
+    localState.execute(markDegraded(noisy.run.agentRunId, "mark-degraded-noisy-p2"));
+
+    const quietPage = readWorkItemActivity(localState, quiet.workItemId);
+    expect(quietPage.omittedCount).toBe(0);
+    expect(quietPage.degraded).toBe(false);
+
+    const noisyPage = readWorkItemActivity(localState, noisy.workItemId, 2_000);
+    expect(noisyPage.omittedCount).toBe(1);
+    expect(noisyPage.degraded).toBe(true);
   });
 
   it("collects the work item's audited workspace tool calls across runs, ordered", async () => {
