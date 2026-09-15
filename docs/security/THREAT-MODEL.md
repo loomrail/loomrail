@@ -2497,9 +2497,9 @@ Required controls:
   first shipped with, and deleted it), and answers `cache-control: no-store` plus
   `x-content-type-options: nosniff` with at most 200 entries. The cursor is opaque and re-parsed through a strict
   schema; a forged or malformed one is refused outright rather than interpolated anywhere, and a cursor naming
-  a pruned position restarts the page with an explicit `gap` — which a source returning its whole read-ahead
-  onto a page that still ends also sets, so `gap` means "this page may be incomplete", not specifically
-  "something was pruned". A cursor that does parse contributes only its own timestamp, and only as a bound SQL
+  a pruned position restarts the page with an explicit `gap`. A source that comes back at its read-ahead cap on
+  a page that still ends without a next cursor sets `gap` too, so `gap` means "this page may be incomplete",
+  not specifically "something was pruned"; only the pruned-cursor case restarts the page. A cursor that does parse contributes only its own timestamp, and only as a bound SQL
   parameter. Recording is guarded by a SYSTEM/session-loop actor check.
 - **Bounded growth and honest loss.** At most 1,000 entries are kept per run, oldest evicted, with the dropped
   count shown. The in-memory queue is capped at 500 and writes happen off the provider's stdout path, so a chatty

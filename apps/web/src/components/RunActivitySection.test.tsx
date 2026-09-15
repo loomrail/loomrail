@@ -1,6 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunActivityEntry, AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
+import type {
+  AgentRunActivityEntry,
+  AgentRunActivityPage,
+  WorkItem,
+  WorkflowSnapshot,
+} from "@loomrail/contracts";
 
 import { I18nProvider } from "../i18n";
 import { RunActivitySection, RunActivityView } from "./RunActivitySection";
@@ -27,8 +32,15 @@ const mockedActivity = vi.hoisted(() => ({
   pages: undefined as readonly AgentRunActivityPage[] | undefined,
 }));
 
+// The workflow snapshot is the gate's second signal (`hasStartedWorkflow`), so the container tests
+// need it mutable too: `run: null` is "this task never started a pipeline", a run is "it did".
+const mockedWorkflow = vi.hoisted(() => ({
+  run: null as WorkflowSnapshot["run"],
+}));
+
 vi.mock("../workspace", () => ({
   useAgentFleet: () => ({ data: { entries: [] } }),
+  useWorkItemWorkflow: () => ({ data: { run: mockedWorkflow.run } }),
   useWorkItemActivity: () => ({
     data: mockedActivity.pages === undefined ? undefined : { pages: mockedActivity.pages },
     error: null,
@@ -40,6 +52,23 @@ vi.mock("../workspace", () => ({
     refetch: vi.fn(),
   }),
 }));
+
+// Only its existence is read by the gate; every field is filler the type needs. `status: "CANCELLED"`
+// is the state that matters here -- the task ran, then the owner cancelled it.
+const cancelledPipelineRun = (): WorkflowSnapshot["run"] => ({
+  schemaVersion: 1,
+  id: "pipeline-run-1",
+  projectId: "project-1",
+  workItemId: "item-1",
+  workflowTemplateId: "workflow-template-1",
+  workflowVersion: 1,
+  status: "CANCELLED",
+  currentStageAttemptId: "stage-attempt-1",
+  version: 2,
+  createdAt: "2026-09-14T10:00:00.000Z",
+  updatedAt: "2026-09-14T11:00:00.000Z",
+  finishedAt: "2026-09-14T11:00:00.000Z",
+});
 
 const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivityEntry => ({
   id: "activity-1",
@@ -55,7 +84,6 @@ const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivity
   truncated: false,
   agentRunId: "run-1",
   stage: "IMPLEMENT",
-  ordinal: 1,
   ...overrides,
 });
 
@@ -154,37 +182,26 @@ describe("RunActivityView", () => {
     expect(list.indexOf("Read file")).toBeLessThan(list.indexOf("Write file"));
   });
 
-  // Spec 128: "записи сгруппированы по прогону, каждая группа названа стадией и порядковым номером
-  // прогона". Two runs, each contributing consecutive entries -- the grouping guard this exercises
-  // is "one group per run, headed by that run's own stage and its OWN backend ordinal (not a
-  // position-based count)", not merely "every entry renders somewhere". Non-sequential ordinals (3
-  // and 7, not 1 and 2) are load-bearing: a mutant that numbered groups by their position instead of
-  // reading `entry.ordinal` would print "Run 1"/"Run 2" here and still pass a fixture that happened
-  // to use sequential ordinals. A mutant that labelled every group with the FIRST entry's stage
-  // (instead of each group's own) would still pass every other test in this file but fails this
-  // one, because "Review" would never appear at all.
-  it("groups consecutive entries by run, each group named by its own run's stage and backend ordinal", () => {
+  // Spec 128: "соседние записи с одним agentRunId образуют группу, названную стадией". Two runs, each
+  // contributing consecutive entries -- the grouping guard this exercises is "one group per run,
+  // headed by that run's OWN stage", not merely "every entry renders somewhere". A mutant that
+  // labelled every group with the FIRST entry's stage (instead of each group's own) would still pass
+  // every other test in this file but fails this one, because "Review" would never appear at all.
+  //
+  // No run NUMBER is asserted, because none is rendered any more: `agent_runs.ordinal` is unique per
+  // StageAttempt, so a stage retry restarts it at 1 and two adjacent groups of one stage would both
+  // read "Run 1" -- the number did not do the job it was added for, so it left the contract.
+  it("groups consecutive entries by run, each group named by its own run's stage", () => {
     const html = renderView({
       entries: [
-        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 3, label: "READ_FILE" }),
-        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 3, label: "WRITE_FILE" }),
-        entry({
-          id: "a3",
-          seq: 1,
-          agentRunId: "run-2",
-          stage: "REVIEW",
-          ordinal: 7,
-          label: "LIST_DIRECTORY",
-        }),
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
+        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
+        entry({ id: "a3", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
       ],
       expanded: true,
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(2);
-    expect(html).toContain("Run 3");
-    expect(html).toContain("Run 7");
-    expect(html).not.toContain("Run 1");
-    expect(html).not.toContain("Run 2");
     // Scoped to the expanded entry LIST, not the collapsed summary above it -- the summary
     // legitimately previews the task's latest action (here, also "List directory") ahead of the
     // list, for an unrelated reason (see the "collapses to the latest action" tests below).
@@ -205,31 +222,24 @@ describe("RunActivityView", () => {
 
   // The spec's grouping rule is "consecutive entries sharing an agentRunId", not "every entry
   // sharing an agentRunId, wherever it appears". A naive `groupBy(agentRunId)` implementation would
-  // fuse the two run-1 spans below back into one group and print "Run 5" once; this fixture can
-  // only pass if the grouping walks the list in order and starts a new group the moment run-2's
-  // entry interrupts run-1's own run. The ordinal itself is simply read off each entry (fix round 1:
-  // no longer computed), so both run-1 groups trivially show the same "Run 5" -- proven here by
-  // counting its occurrences rather than assuming it.
-  it("starts a new group when the same run's entries are not consecutive, and both groups still show that run's own ordinal", () => {
+  // fuse the two run-1 spans below back into one group and render TWO groups, not three; this
+  // fixture can only pass if the grouping walks the list in order and starts a new group the moment
+  // run-2's entry interrupts run-1's own run. The two run-1 spans use the same stage, so the count
+  // -- not the heading text -- is what discriminates.
+  it("starts a new group when the same run's entries are not consecutive", () => {
     const html = renderView({
       entries: [
-        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 5, label: "READ_FILE" }),
-        entry({
-          id: "a2",
-          seq: 1,
-          agentRunId: "run-2",
-          stage: "REVIEW",
-          ordinal: 2,
-          label: "LIST_DIRECTORY",
-        }),
-        entry({ id: "a3", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 5, label: "WRITE_FILE" }),
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
+        entry({ id: "a2", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
+        entry({ id: "a3", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
       ],
       expanded: true,
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(3);
-    expect((html.match(/Run 5/g) ?? []).length).toBe(2);
-    expect((html.match(/Run 2/g) ?? []).length).toBe(1);
+    const list = html.slice(html.indexOf("run-activity__entries"));
+    expect((list.match(/Implementation/g) ?? []).length).toBe(2);
+    expect((list.match(/Review/g) ?? []).length).toBe(1);
   });
 
   // "Свёрнутая сводка показывает последнее действие по задаче" -- across the whole task, not just
@@ -290,10 +300,24 @@ describe("RunActivityView", () => {
     const expandedDegraded = renderView({ degraded: true, entries: [entry()], expanded: true });
 
     expect(collapsedHealthy).not.toContain("Incomplete");
-    // A recorder failure must not look like a quiet run -- so it is visible before the owner ever
-    // expands the section, not only once they go looking.
+    // Degradation must not look like a quiet run -- so it is visible before the owner ever expands
+    // the section, not only once they go looking.
     expect(collapsedDegraded).toContain("Incomplete");
-    expect(expandedDegraded).toContain("This feed is incomplete");
+    expect(expandedDegraded).toContain("incomplete");
+  });
+
+  // The same correction Ruling S13 made to `runActivity.gap`, applied to its twin. `degraded` ORs
+  // three unrelated facts -- the stored recorder flag aggregated across EVERY run of the task, a run
+  // whose stage would not resolve, and audited rows for a run with no live provider -- so copy
+  // blaming "a recorder" "during this run" asserted both a mechanism that holds for one of the three
+  // and a scope the feed does not have. This asserts the consequence and refuses the two claims, so
+  // it fails on the old string rather than merely tracking whatever the new one says.
+  it("says what is missing when the feed is degraded, without naming a mechanism or one run", () => {
+    const html = renderView({ degraded: true, entries: [entry()], expanded: true });
+
+    expect(html).toContain("incomplete");
+    expect(html).not.toContain("recorder");
+    expect(html).not.toContain("this run");
   });
 
   // The notice must not name a mechanism, because `gap` has two causes the page cannot tell apart
@@ -489,6 +513,7 @@ describe("RunActivitySection", () => {
     window.localStorage.clear();
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-US" });
     mockedActivity.pages = undefined;
+    mockedWorkflow.run = null;
   });
 
   const renderSection = (): string =>
@@ -513,6 +538,25 @@ describe("RunActivitySection", () => {
 
   it("renders the section once the WorkItem has started its workflow, mocked hooks or not", () => {
     expect(renderSection()).toContain("Run Activity");
+  });
+
+  // The defect the final review caught: three CANCEL decisions in packages/domain put
+  // `currentStage` back to `null` on a task that has run a whole pipeline (qa-correction.ts's
+  // correction gate; verification-correction.ts's two), so a gate reading `currentStage` alone hid
+  // the entire account of what the agents did the moment the owner cancelled -- the same narrative
+  // disappearance spec 128 exists to close, on a different axis. The pipeline run is what says the
+  // task ran; this fixture is exactly the shape that tells the two gates apart, since `currentStage`
+  // is null in both this test and the "never started" one above.
+  it("still renders the section for a cancelled WorkItem whose currentStage was cleared", () => {
+    mockedWorkflow.run = cancelledPipelineRun();
+
+    const html = renderToStaticMarkup(
+      <I18nProvider>
+        <RunActivitySection item={workItem({ id: "item-1", currentStage: null })} />
+      </I18nProvider>,
+    );
+
+    expect(html).toContain("Run Activity");
   });
 
   // Fix round 1 on Task 5: `degraded` is a warning, and a warning must not un-announce itself. The

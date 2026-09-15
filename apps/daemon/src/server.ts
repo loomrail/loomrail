@@ -119,7 +119,6 @@ import {
   verificationPlanSettingsResponseSchema,
   verificationRunSnapshotResponseSchema,
   verificationRunsResponseSchema,
-  type AgentRunActivityPage,
   type ApiErrorResponse,
   type DomainEvent,
   type PublishedWorkItemWorkspace,
@@ -212,12 +211,14 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { z, ZodError } from "zod";
 
 import {
+  activitySourceFetchLimit,
   buildAgentRunActivityPage,
   decodeCursor,
   resolveAuditedCallsForRead,
   resolveReferencedRuns,
   MAX_ACTIVITY_PAGE_SIZE,
   type ActivityCursor,
+  type BuiltActivityPage,
   type RunLookup,
 } from "./agent-run-activity.js";
 import { cleanupExpiredAgentRunActivity } from "./agent-run-activity-retention.js";
@@ -3448,7 +3449,13 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // onward (a superset of "strictly after", by design -- see the query's own comment in
         // packages/persistence-sqlite/src/index.ts), which is what lets `buildAgentRunActivityPage`'s
         // existing `locateCursor` still find the cursor's own row and confirm it was not pruned.
+        //
+        // The per-source limit is `activitySourceFetchLimit(pageSize)`, not `pageSize + 1`: the
+        // window includes the cursor's own row, which is then dropped, so a read-ahead of one row
+        // left nothing to prove a next page with once the cursor was consumed (see that function's
+        // own comment for the 400-entry collapse this fixes).
         const activityPageSize = MAX_ACTIVITY_PAGE_SIZE;
+        const activitySourceLimit = activitySourceFetchLimit(activityPageSize);
         const fetchWindow = (
           after: string | undefined,
         ): {
@@ -3464,7 +3471,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             type: "LIST_WORK_ITEM_ACTIVITY",
             workItemId: params.workItemId,
             ...afterField,
-            limit: activityPageSize + 1,
+            limit: activitySourceLimit,
           });
           if (reportedResult.type !== "WORK_ITEM_ACTIVITY") {
             throw new StateStoreError(
@@ -3476,7 +3483,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
             workItemId: params.workItemId,
             ...afterField,
-            limit: activityPageSize + 1,
+            limit: activitySourceLimit,
           });
           if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
             throw new StateStoreError(
@@ -3511,7 +3518,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             const run = result.type === "AGENT_RUNS" ? result.runs[0] : undefined;
             return run === undefined
               ? undefined
-              : { stageAttemptId: run.stageAttemptId, provider: run.provider, ordinal: run.ordinal };
+              : { stageAttemptId: run.stageAttemptId, provider: run.provider };
           },
           getStageAttempt: (stageAttemptId) => {
             const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId });
@@ -3524,7 +3531,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         const buildFromWindow = (
           window: ReturnType<typeof fetchWindow>,
           cursorForBuild: ActivityCursor | null,
-        ): AgentRunActivityPage => {
+        ): BuiltActivityPage => {
           const referencedRunIds = Array.from(
             new Set<string>([
               ...window.audited.map((call) => call.agentRunId),
@@ -3554,18 +3561,25 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           });
         };
 
-        let page = buildFromWindow(fetchWindow(cursor === null ? undefined : cursor.at), cursor);
-        // The bounded fetch above is a superset of "strictly after the cursor", never a strict
-        // subset (see fetchWindow's own comment), so a `gap` here means the cursor's row genuinely
-        // is not in this WorkItem's held data -- pruned by reported-side eviction, or a cursor that
-        // never named a real position. Either way, the correct recovery is the same "restart from
-        // the true beginning" the pre-fix single-run design always gave a gap: refetch unfiltered.
-        // (This is the one case where the AUDITED source's own `after` bound could have hidden
-        // genuinely-live history: `workspace_tool_calls` never evicts, so an audited entry older
-        // than an evicted REPORTED cursor is still valid and belongs on a gap-restarted page.)
-        if (cursor !== null && page.gap) {
+        const built = buildFromWindow(fetchWindow(cursor === null ? undefined : cursor.at), cursor);
+        let page = built.page;
+        // Rewinds on `cursorLost`, NOT on `page.gap`. The bounded fetch above is a superset of
+        // "strictly after the cursor", never a strict subset (see fetchWindow's own comment), so
+        // `cursorLost` means the cursor's row genuinely is not in this WorkItem's held data --
+        // pruned by reported-side eviction, or a cursor that never named a real position. Either
+        // way, the correct recovery is the same "restart from the true beginning" the pre-fix
+        // single-run design always gave a gap: refetch unfiltered. (This is the one case where the
+        // AUDITED source's own `after` bound could have hidden genuinely-live history:
+        // `workspace_tool_calls` never evicts, so an audited entry older than an evicted REPORTED
+        // cursor is still valid and belongs on a gap-restarted page.)
+        //
+        // `page.gap` is the wider warning shown to the owner and covers a second cause -- a source
+        // that came back at its read-ahead cap on a page that still ended without a `nextCursor`.
+        // That page's cursor was found; rewinding it would re-serve the feed's first entries under a
+        // cursor the client keeps paging from, which is the loop this branch used to create.
+        if (cursor !== null && built.cursorLost) {
           const rebuilt = buildFromWindow(fetchWindow(undefined), null);
-          page = { ...rebuilt, gap: true };
+          page = { ...rebuilt.page, gap: true };
         }
         return reply
           .header("cache-control", "no-store")

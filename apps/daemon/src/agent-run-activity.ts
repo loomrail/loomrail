@@ -101,9 +101,10 @@ export const decodeCursor = (value: string): ActivityCursor | null => {
 // Bounded by the response schema's own `entries` cap (`agentRunActivityPageSchema`): a page cannot
 // carry more than this regardless of what the caller asks for.
 //
-// Fix round 1 (Task 2): this is now also what the caller fetches roughly this-many-plus-one of from
-// EACH source's own LIST_WORK_ITEM_ACTIVITY/LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM call, cursor
-// pushed into the SQL `after` bound -- replacing a flat 2_000-row "read everything" constant
+// Fix round 1 (Task 2): this is now also the base of what the caller fetches from EACH source's own
+// LIST_WORK_ITEM_ACTIVITY/LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM call (`activitySourceFetchLimit`
+// below), cursor pushed into the SQL `after` bound -- replacing a flat 2_000-row "read everything"
+// constant
 // (REPORTED_ENTRIES_FETCH_LIMIT, removed) whose own comment claimed 2_000 was "comfortably above one
 // run's 1_000-row eviction bound" without noticing the bound is per RUN while the read is per
 // WORKITEM: a WorkItem with three or more busy runs could already exceed it, silently losing exactly
@@ -114,16 +115,35 @@ export const decodeCursor = (value: string): ActivityCursor | null => {
 export const MAX_ACTIVITY_PAGE_SIZE = 200;
 
 /**
+ * How many rows the caller must fetch from EACH source to build one page of `pageSize`.
+ *
+ * `pageSize + 2`, and both extra rows are load-bearing (fix round 3, final review). The SQL window
+ * is `>= cursor.at`, deliberately inclusive of the cursor's own row so `locateCursor` can confirm it
+ * was not pruned -- so on every page after the first, one fetched row is spent on the cursor itself
+ * and is never emitted. The earlier bound of `pageSize + 1` did not budget for that: after the
+ * cursor row was consumed exactly `pageSize` rows remained, the slice ended flush with the window
+ * (`endIndex === merged.length`), `nextCursor` came back `null` -- and because the window had come
+ * back capped, `gap` fired. Every feed of `2 * pageSize` entries or more hit that on its second
+ * page, which is 400 for the real page size while one AgentRun alone may emit 1,000 entries before
+ * eviction. One row for the cursor, one row to prove a next page exists: that is what makes "is
+ * there more?" decidable once the cursor row is spent.
+ *
+ * Exported so the route and the tests that model the route's window share one definition rather
+ * than two literals that can drift apart -- the drift is what produced the defect above.
+ */
+export const activitySourceFetchLimit = (pageSize: number): number => pageSize + 2;
+
+/**
  * What a WorkItem's own AgentRun contributes to the merged feed besides its rows: the provider to
- * label its audited calls with (`workspace_tool_calls` carries none of its own -- ADR-0014), the
+ * label its audited calls with (`workspace_tool_calls` carries none of its own -- ADR-0014) and the
  * stage to name its group with in the UI (neither source table carries `stage` -- resolving it would
- * need a join through `stage_attempts` that Task 1 deliberately kept out of both entry reads), and
- * the run's own `ordinal` (fix round 1 on Task 3: a reader grouping by `agentRunId` needs a number to
- * label the group with, and this is the one the AgentRun itself already carries, rather than a
- * client-invented count that would read differently for the same run in two different panels). That
- * is NOT the Workflow panel's "Session N", which labels `provider_sessions.ordinal` -- a different
- * counter over a different table, diverging from this one as soon as a context handoff starts a
- * second ProviderSession under the same still-running AgentRun (fix round 2 on Task 3).
+ * need a join through `stage_attempts` that Task 1 deliberately kept out of both entry reads).
+ *
+ * The run's own `agent_runs.ordinal` used to travel alongside these, so the UI could head a group
+ * "Run N". It no longer does: that column is `UNIQUE (stage_attempt_id, ordinal)`, so a stage retry
+ * opens a fresh StageAttempt whose first AgentRun is ordinal 1 again and two adjacent groups for two
+ * attempts of the same stage both read "Run 1" -- exactly the indistinguishability the number was
+ * introduced to remove. See `agentRunActivityEntrySchema` in packages/contracts/src/activity.ts.
  *
  * Keyed by `agentRunId` rather than positional, so a page spanning several runs can look either
  * source's own per-entry `agentRunId` up directly instead of the caller pre-sorting or zipping rows
@@ -138,10 +158,6 @@ export type RunActivityContext = {
   // MOCK session through the real workspace-tool gateway either).
   readonly provider: LiveProviderId | null;
   readonly stage: ActivityStage;
-  // `agent_runs.ordinal`, `UNIQUE (stage_attempt_id, ordinal)`. Resolved here rather than left for
-  // the reader to invent, for the same reason `stage` is: two different readers must not disagree
-  // about the one number that names this run.
-  readonly ordinal: number;
 };
 
 // Trimmed to exactly what `resolveReferencedRuns` reads off each row -- a lookup interface rather
@@ -150,7 +166,6 @@ export type RunActivityContext = {
 export type ReferencedAgentRun = {
   readonly stageAttemptId: string;
   readonly provider: string;
-  readonly ordinal: number;
 };
 
 export type ReferencedStageAttempt = {
@@ -216,7 +231,6 @@ export const resolveReferencedRuns = (agentRunIds: readonly string[], lookup: Ru
       agentRunId,
       provider: runProvider.success ? runProvider.data : null,
       stage: stageAttempt.stage,
-      ordinal: agentRun.ordinal,
     });
   }
   return { runs, unresolvedRunIds };
@@ -233,16 +247,15 @@ export const resolveReferencedRuns = (agentRunIds: readonly string[], lookup: Ru
  * travels in its own field instead.
  *
  * `agentRunId` comes straight off the call's own column -- `workspace_tool_calls` has always carried
- * it (ADR-0014), so unlike `stage`/`ordinal` this needs no resolution from the caller. `seq` has no
- * column to read on this table (unlike the reported side's own `agent_run_activity.seq` counter):
- * assigned by the caller as the entry's 1-based rank within its own run's own calls, in `startedAt`
- * order -- see `mapAuditedEntries` below for why that is per-run and not per-page.
+ * it (ADR-0014), so unlike `stage` this needs no resolution from the caller. `seq` has no column to
+ * read on this table (unlike the reported side's own `agent_run_activity.seq` counter): assigned by
+ * the caller as the entry's 1-based rank within its own run's own calls, in `startedAt` order -- see
+ * `mapAuditedEntries` below for why that is per-run and not per-page.
  */
 const activityEntryFromWorkspaceToolCall = (
   call: WorkspaceToolCallRecord,
   provider: LiveProviderId,
   stage: ActivityStage,
-  ordinal: number,
   seq: number,
 ): AgentRunActivityEntry =>
   agentRunActivityEntrySchema.parse({
@@ -259,18 +272,16 @@ const activityEntryFromWorkspaceToolCall = (
     truncated: false,
     agentRunId: call.agentRunId,
     stage,
-    ordinal,
   } satisfies AgentRunActivityEntry);
 
 // The reported side's raw row already carries everything an entry needs, `agentRunId` included
 // (Task 1's own `WorkItemActivityRow`); this only adds the `origin` its source table implies and the
-// `stage`/`ordinal` the caller resolved for that row's run. `failureCode` is always `null` here --
+// `stage` the caller resolved for that row's run. `failureCode` is always `null` here --
 // `agent_run_activity` has no such column, since it is the provider's own unverified account, not an
 // audited outcome.
 const activityEntryFromReportedRow = (
   row: WorkItemActivityRow,
   stage: ActivityStage,
-  ordinal: number,
 ): AgentRunActivityEntry =>
   agentRunActivityEntrySchema.parse({
     id: row.id,
@@ -286,7 +297,6 @@ const activityEntryFromReportedRow = (
     truncated: row.truncated,
     agentRunId: row.agentRunId,
     stage,
-    ordinal,
   } satisfies AgentRunActivityEntry);
 
 // Where in the merged feed a page starts, and whether that start is a gap.
@@ -323,6 +333,17 @@ export type BuildActivityPageInput = {
   /** Already decoded by the caller (`decodeCursor`); `null` means "from the start". */
   readonly cursor: ActivityCursor | null;
   readonly pageSize?: number;
+};
+
+export type BuiltActivityPage = {
+  readonly page: AgentRunActivityPage;
+  // The cursor named a position this page's window does not hold -- pruned by reported-side
+  // eviction, or a cursor that never named a real position. Deliberately NOT readable off
+  // `page.gap`, which is the wider "this page may be incomplete" the client is shown: a page whose
+  // cursor was found can still set `gap` because a source came back at its read-ahead cap. Only the
+  // narrow fact belongs to the route's rewind decision, and conflating the two is what made every
+  // page after the 400th entry restart the feed from the beginning.
+  readonly cursorLost: boolean;
 };
 
 // Shared by both entry mappers below: every row and call on a WorkItem-scoped page names its own
@@ -365,7 +386,7 @@ const mapAuditedEntries = (
     }
     const seq = (seqByRun.get(call.agentRunId) ?? 0) + 1;
     seqByRun.set(call.agentRunId, seq);
-    return activityEntryFromWorkspaceToolCall(call, context.provider, context.stage, context.ordinal, seq);
+    return activityEntryFromWorkspaceToolCall(call, context.provider, context.stage, seq);
   });
 };
 
@@ -375,7 +396,7 @@ const mapReportedEntries = (
 ): readonly AgentRunActivityEntry[] =>
   rows.map((row) => {
     const context = runContextFor(runs, row.agentRunId);
-    return activityEntryFromReportedRow(row, context.stage, context.ordinal);
+    return activityEntryFromReportedRow(row, context.stage);
   });
 
 export type ResolvedAuditedCalls = {
@@ -426,42 +447,54 @@ export const resolveAuditedCallsForRead = (
  * `id` is the only identity a reader -- or a UI keying rows -- can rely on here.
  *
  * `input.auditedCalls`/`input.reportedRows` carry one more implicit contract this function relies
- * on (fix round 2): the caller fetched at most `pageSize + 1` rows per source, its own read-ahead
- * bound for detecting "is there a next page" (see server.ts's `fetchWindow`). Handed anything else
- * -- fewer is always fine, but *more* than `pageSize + 1` from one source would defeat the
- * `sourceMightHoldMore` signal below -- the gap this exists to catch could go undetected again.
+ * on: the caller fetched at most `activitySourceFetchLimit(pageSize)` rows per source (see
+ * server.ts's `fetchWindow`). Fewer is always fine -- it only means that source is exhausted. More
+ * would be a caller bug: `sourceWindowWasCapped` below reads "this source came back at its cap" off
+ * the row count, and a caller that over-fetched would make every window look capped.
+ *
+ * Returns the cursor-lost signal SEPARATELY from the page, rather than folding it into `gap`. They
+ * were the same fact only in fix round 1, when a missing cursor row was `gap`'s only trigger; round
+ * 2 widened `gap` to cover a capped window too, and the route kept treating any `gap` as "the cursor
+ * is gone" and restarting the feed from the beginning -- returning the first page's entries again,
+ * with a `nextCursor` that made "Show more" append them forever. Only `cursorLost` means the cursor
+ * named a position this WorkItem no longer holds; only that warrants a rewind.
  */
-export const buildAgentRunActivityPage = (input: BuildActivityPageInput): AgentRunActivityPage => {
+export const buildAgentRunActivityPage = (input: BuildActivityPageInput): BuiltActivityPage => {
   const pageSize = input.pageSize ?? MAX_ACTIVITY_PAGE_SIZE;
   const runsById = new Map(input.runs.map((run) => [run.agentRunId, run]));
   const audited = mapAuditedEntries(input.auditedCalls, runsById);
   const reported = mapReportedEntries(input.reportedRows, runsById);
   const merged = mergeRunActivity(audited, reported);
 
-  const { index: startIndex, gap: cursorGap } = locateCursor(merged, input.cursor);
+  const { index: startIndex, gap: cursorLost } = locateCursor(merged, input.cursor);
   const endIndex = Math.min(startIndex + pageSize, merged.length);
   const entries = merged.slice(startIndex, endIndex);
   const lastEntry = entries[entries.length - 1];
   const nextCursor = endIndex < merged.length && lastEntry !== undefined ? encodeCursor(lastEntry) : null;
 
-  // A source that handed in exactly `pageSize + 1` rows -- its own read-ahead cap -- might hold more
-  // beyond what it fetched. Ordinarily `nextCursor` already says so (more rows than fit on one
-  // page), but a run of entries sharing one exact sort key can leave the caller's `>= cursor.at`
-  // fetch unable to slide past it on a later page: the same capped window gets re-read every time
-  // (see the query's own comment in packages/persistence-sqlite/src/index.ts), and this page's own
-  // slice can still land exactly at the end of that frozen window. When that combination still
-  // leaves `nextCursor` null -- "nothing more" -- that claim is unverifiable, so this flags `gap`
-  // instead of asserting an end the caller cannot actually see. A documented hole is still a hole if
+  // A source that came back at its own read-ahead cap might hold more beyond what it fetched.
+  // Ordinarily `nextCursor` already says so: the cap is two rows above the page size, so one spare
+  // row survives the cursor row and pushes `merged` past the slice. The exception is a run of
+  // entries sharing one exact sort key, which leaves the caller's `>= cursor.at` fetch unable to
+  // slide past it on a later page: the same capped window is re-read every time (see the query's own
+  // comment in packages/persistence-sqlite/src/index.ts), the cursor sits deeper and deeper inside
+  // it, and the slice can then land flush with the end of that frozen window. When that leaves
+  // `nextCursor` null -- "nothing more" -- the claim is unverifiable, so this flags `gap` rather
+  // than asserting an end the caller cannot actually see. A documented hole is still a hole if
   // nothing on screen says so.
-  const sourceMightHoldMore =
-    input.auditedCalls.length === pageSize + 1 || input.reportedRows.length === pageSize + 1;
-  const gap = cursorGap || (nextCursor === null && sourceMightHoldMore);
+  const readAhead = activitySourceFetchLimit(pageSize);
+  const sourceWindowWasCapped =
+    input.auditedCalls.length >= readAhead || input.reportedRows.length >= readAhead;
+  const gap = cursorLost || (nextCursor === null && sourceWindowWasCapped);
 
-  return agentRunActivityPageSchema.parse({
-    entries,
-    nextCursor,
-    omittedCount: input.omittedCount,
-    degraded: input.degraded,
-    gap,
-  } satisfies AgentRunActivityPage);
+  return {
+    page: agentRunActivityPageSchema.parse({
+      entries,
+      nextCursor,
+      omittedCount: input.omittedCount,
+      degraded: input.degraded,
+      gap,
+    } satisfies AgentRunActivityPage),
+    cursorLost,
+  };
 };

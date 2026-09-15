@@ -113,9 +113,10 @@ The cursor is opaque base64url over that same triple, parsed back through a `.st
 forged cursor is refused with `INVALID_ACTIVITY_CURSOR` rather than silently treated as "start again", and a
 cursor naming a position that has since been pruned restarts the page from the oldest entry still held with
 `gap: true` so the owner is told about the hole. That is no longer `gap`'s only trigger: spec 128 also sets it
-when a source returns its whole read-ahead and the page still ends with no next cursor, where "nothing more"
-is a claim the read cannot support. `gap` therefore means "this page may be incomplete", not specifically
-"something was pruned". `seq` is monotonic within one source and not dense, and it is not the cursor; under
+when a source comes back at its read-ahead cap and the page still ends with no next cursor, where "nothing
+more" is a claim the read cannot support. `gap` therefore means "this page may be incomplete", not
+specifically "something was pruned", and only the pruned-cursor case restarts the page -- restarting on the
+wider signal would re-serve the feed's first entries to a client that keeps paging forward. `seq` is monotonic within one source and not dense, and it is not the cursor; under
 spec 128's WorkItem-wide page that monotonicity holds within one source **per run**, so one source's numbering
 restarts at 1 at each run boundary.
 
@@ -209,8 +210,10 @@ nothing interprets it as Markdown, HTML or a link.
   bound is lifted.** `docs/plans/128-work-item-activity-spec.ru.md` rebound the feed to the WorkItem itself: a
   WorkItem-scoped route replaces the AgentRun-scoped one, both source reads filter on the `work_item_id` column
   their own tables already carried (migrations 0055 and 0062), and every entry now carries its own
-  `agentRunId`, `stage` and the run's `ordinal`, so the section shows the task's whole run history grouped by
-  run and each group is named by its stage. Nothing else decided here moved with it: the two origins, their
+  `agentRunId` and `stage`, so the section shows the task's whole run history grouped by run, each group named
+  by its stage. No run number travels with the entry: `agent_runs.ordinal` is unique per StageAttempt, so a
+  stage retry restarts it at 1 and two adjacent groups for two attempts of one stage would carry the same
+  number. Nothing else decided here moved with it: the two origins, their
   separate storage, the read-time merge, the bounds, the redaction and the feed's lack of authority all stand.
   The row itself was never lost -- it stays in the append-only `workspace_tool_calls` table -- and the file
   change it produced stayed visible in the Changes section throughout, regardless of pipeline progress.

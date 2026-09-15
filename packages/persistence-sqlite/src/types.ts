@@ -274,10 +274,6 @@ export type StateQuery =
   | { type: "LIST_PROVIDER_SESSION_MCP_SNAPSHOTS"; providerSessionId: string }
   | { type: "LIST_MCP_TOOL_CALLS"; providerSessionId: string }
   | { type: "LIST_WORKSPACE_TOOL_CALLS"; providerSessionId: string }
-  // Task 8's merge reads the audited side of the feed straight off `agent_run_id`, the column
-  // `workspace_tool_calls` already carries -- not by resolving a ProviderSession first, which would
-  // assume one session per AgentRun instead of just asking the table for what it already knows.
-  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"; agentRunId: string }
   // Task 1's work-item-scoped sibling: the WorkItem-spanning Run Activity feed groups entries by
   // run, so it needs every run's audited calls, not one run's. `workspace_tool_calls` already
   // carries `work_item_id` as its own column (migration 0055), so this filters on it directly --
@@ -346,8 +342,7 @@ export type StateQuery =
   | {
       // Task 10's shared "what is it doing right now" read: the newest entry across BOTH Run
       // Activity sources, for each of the given AgentRuns, in one query -- a newest-first sibling
-      // of LIST_AGENT_RUN_ACTIVITY and LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN above, which both
-      // read one run's full ascending history. A run with no entries in either source is simply
+      // of LIST_AGENT_RUN_ACTIVITY above, which reads one run's full ascending history. A run with no entries in either source is simply
       // absent from the result, not present with a null -- see LatestAgentRunActivityEntry.
       type: "LIST_LATEST_AGENT_RUN_ACTIVITY";
       agentRunIds: readonly string[];

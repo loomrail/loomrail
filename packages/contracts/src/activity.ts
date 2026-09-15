@@ -94,15 +94,14 @@ export const agentRunActivityEntrySchema = z
     // from the next run's, and the two can be minutes apart or days.
     agentRunId: z.string().min(1),
     stage: workflowStageSchema,
-    // The AgentRun's own `agent_runs.ordinal` (`UNIQUE (stage_attempt_id, ordinal)`). Carried here
-    // so a reader grouping by `agentRunId` can label a group with the number this run already
-    // carries in the database, instead of inventing a second, task-wide count that would disagree
-    // with it. NOT the Workflow panel's "Session N": that labels `provider_sessions.ordinal`, a
-    // different counter over a different table, and the two diverge the moment a context handoff
-    // starts a second ProviderSession under the same still-running AgentRun. Run Activity names this
-    // number for what it is -- "Run N", `runActivity.group.ordinal` -- for that reason; see
-    // RunActivitySection.tsx's own note beside the group heading.
-    ordinal: z.number().int().positive(),
+    // No run NUMBER travels with the entry, deliberately. An earlier cut carried
+    // `agent_runs.ordinal` so a reader could head each group "Run N", on the premise that the
+    // number distinguishes two adjacent groups of the same stage. It does not: `agent_runs.ordinal`
+    // is `UNIQUE (stage_attempt_id, ordinal)`, so a stage RETRY opens a new StageAttempt whose first
+    // AgentRun is ordinal 1 again -- two adjacent groups for two attempts of the same stage would
+    // both read "Run 1", which is the very indistinguishability the number was added to prevent. A
+    // number that repeats across different runs is worse than none, and the groups are already
+    // ordered by their entries' own timestamps, so the heading carries `stage` alone.
   })
   .strict();
 

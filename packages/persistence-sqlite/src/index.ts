@@ -1589,9 +1589,6 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_MCP_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS"), providerSessionId: opaqueIdSchema }).strict(),
   z
-    .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"), agentRunId: opaqueIdSchema })
-    .strict(),
-  z
     .object({
       type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"),
       workItemId: opaqueIdSchema,
@@ -3852,12 +3849,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectWorkspaceToolCallsForSession = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE provider_session_id = ? ORDER BY started_at, id",
-    );
-    // Task 8's merged activity feed: the audited half, read straight by `agent_run_id` rather than
-    // through a ProviderSession lookup, ordered the same way as the reported side's own query so a
-    // read-time `seq` (the table itself has none) can be assigned by array position deterministically.
-    const selectWorkspaceToolCallsForAgentRun = database.prepare(
-      "SELECT * FROM workspace_tool_calls WHERE agent_run_id = ? ORDER BY started_at, id",
     );
     // Task 1's work-item-scoped sibling: the feed's unit moves from AgentRun to WorkItem, so the
     // audited half now needs every one of the WorkItem's runs, not one. `workspace_tool_calls`
@@ -14700,13 +14691,6 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             type: "WORKSPACE_TOOL_CALLS",
             calls: selectWorkspaceToolCallsForSession
               .all(queryValue.providerSessionId)
-              .map(workspaceToolCallFromRow),
-          };
-        case "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN":
-          return {
-            type: "WORKSPACE_TOOL_CALLS",
-            calls: selectWorkspaceToolCallsForAgentRun
-              .all(queryValue.agentRunId)
               .map(workspaceToolCallFromRow),
           };
         case "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM":

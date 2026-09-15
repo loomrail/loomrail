@@ -706,8 +706,8 @@ describe("work item activity HTTP boundary", () => {
 
   it("flags gap instead of silently truncating when a run of same-timestamp entries outlasts the fetch window", async () => {
     // Fix round 2, reproduced through the real route: 250 reported rows sharing one observed_at
-    // millisecond outlast the 201-row-per-source fetch window this route uses per page
-    // (MAX_ACTIVITY_PAGE_SIZE + 1). The caller's `>= cursor.at` filter (deliberately inclusive, see
+    // millisecond outlast the per-source fetch window this route uses per page
+    // (`activitySourceFetchLimit(MAX_ACTIVITY_PAGE_SIZE)`). The caller's `>= cursor.at` filter (deliberately inclusive, see
     // the query's own comment in packages/persistence-sqlite/src/index.ts) re-reads the identical
     // first 201 rows on every later page, unable to ever slide past the tie -- before this fix, the
     // feed ended 49 rows short with `gap: false`, `degraded: false`, `nextCursor: null`, a silent
@@ -883,12 +883,13 @@ describe("work item activity HTTP boundary", () => {
     });
     const session = await authenticate(daemon, token);
 
-    // Walks pages the way a well-behaved client does: a page flagging `gap: true` is a restart, not
-    // a continuation (the same contract eviction-caused gaps already carried before this fix round),
-    // so this stops there rather than keep summing entries across it -- the gap-rewind fallback
-    // (server.ts) legitimately re-serves entries a client already saw, and a client that kept
-    // blindly following `nextCursor` past a flagged gap here would just replay the same rewound page
-    // forever, which is a client-side bug this test is not the place to reproduce.
+    // Walks pages the way a well-behaved client does. A page flagging `gap: true` ends the walk --
+    // there is nothing further this test needs from it -- but before that, every page must be new
+    // work: the cursor is never LOST on this fixture (each page finds the row its cursor named; the
+    // window merely cannot slide past the tie), so nothing here justifies the route's
+    // restart-from-the-beginning fallback. Fix round 3: the route used to rewind on any `gap`, which
+    // re-served the feed's first 200 entries on this very page, so a page that repeats an entry the
+    // client has already seen is the defect itself, not an acceptable side effect.
     const seenIds = new Set<string>();
     let cursor: string | null = null;
     for (let page = 0; page < 4; page += 1) {
@@ -899,6 +900,7 @@ describe("work item activity HTTP boundary", () => {
       const response = await fetch(url, { headers: { cookie: session.cookie } });
       expect(response.status).toBe(200);
       const body = agentRunActivityPageSchema.parse(await response.json());
+      expect(body.entries.filter((entry) => seenIds.has(entry.id))).toEqual([]);
       for (const entry of body.entries) seenIds.add(entry.id);
       if (body.gap) {
         // Reached: the fix converted what would have been a silent `nextCursor: null` false-
@@ -914,5 +916,255 @@ describe("work item activity HTTP boundary", () => {
       cursor = body.nextCursor;
     }
     throw new Error("Expected the feed to either flag a gap or terminate within 4 pages");
+  });
+
+  // Seeds a WorkItem whose single AgentRun has recorded `entryCount` PROVIDER_REPORTED entries, each
+  // at its own distinct millisecond (`openState`'s ticking clock). Shared by the two paging tests
+  // below rather than copied: they differ only in how they walk the resulting feed.
+  const seedRecordedFeed = async (directory: string, entryCount: number): Promise<string> => {
+    const state = await openState(directory);
+    const template: WorkflowTemplate = {
+      schemaVersion: 1,
+      id: "work-item-activity-recorded-feed",
+      version: 1,
+      name: "Recorded feed",
+      stages: [{ stage: "DISCOVERY", ordinal: 0, contextPack }],
+    };
+    try {
+      state.execute({
+        schemaVersion: 1,
+        commandId: "register-project",
+        correlationId: "correlation-register-project",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "REGISTER_PROJECT",
+        payload: {
+          id: "project-1",
+          fixtureId: null,
+          name: "Work item activity recorded-feed fixture",
+          repositoryPath: join(directory, "repo"),
+        },
+      });
+      const created = state.execute({
+        schemaVersion: 1,
+        commandId: "create-work-item",
+        correlationId: "correlation-create-work-item",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "CREATE_WORK_ITEM",
+        payload: {
+          projectId: "project-1",
+          parentId: null,
+          type: "TASK",
+          title: "Page a recorded feed",
+          description: "Synthetic fixture",
+          priority: "MEDIUM",
+          risk: "LOW",
+          acceptanceCriteria: ["The feed pages forward instead of restarting"],
+        },
+      });
+      if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+      const workItemId = created.workItem.id;
+      state.execute({
+        schemaVersion: 1,
+        commandId: "ready-work-item",
+        correlationId: "correlation-ready-work-item",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "MOVE_WORK_ITEM",
+        payload: { workItemId, expectedVersion: 1, targetState: "READY" },
+      });
+      const pipeline = state.execute({
+        schemaVersion: 1,
+        commandId: "start-pipeline",
+        correlationId: "correlation-start-pipeline",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "START_MOCK_PIPELINE",
+        payload: {
+          workItemId,
+          expectedVersion: 2,
+          template,
+          budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+        },
+      });
+      if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+      const agent = state.execute({
+        schemaVersion: 1,
+        commandId: "start-agent-run",
+        correlationId: "correlation-start-agent-run",
+        actor: { type: "SYSTEM", id: "local-daemon" },
+        type: "START_AGENT_RUN",
+        payload: {
+          dispatchId: pipeline.dispatch.id,
+          provider: "CODEX",
+          limits: { global: 3, project: 3, provider: 3 },
+        },
+      });
+      if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+      const session = state.execute({
+        schemaVersion: 1,
+        commandId: "start-provider-session",
+        correlationId: "correlation-start-provider-session",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "START_PROVIDER_SESSION",
+        payload: {
+          stageAttemptId: pipeline.stageAttempt.id,
+          recipe: {
+            schemaVersion: 1,
+            templateId: template.id,
+            templateVersion: template.version,
+            specSource: "ROLE_PLAYBOOK",
+            roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+            sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+            omitted: [],
+            contentHash: `sha256:${"a".repeat(64)}`,
+            estimatedTokens: 10,
+            budgetTokens: 100,
+            estimateQuality: "LOOMRAIL_ESTIMATE",
+          },
+        },
+      });
+      if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+
+      for (let index = 0; index < entryCount; index += 1) {
+        state.execute({
+          schemaVersion: 1,
+          commandId: `activity-${index.toString()}`,
+          correlationId: "correlation-agent-run-activity",
+          actor: { type: "SYSTEM", id: "session-loop" },
+          type: "RECORD_AGENT_RUN_ACTIVITY",
+          payload: {
+            agentRunId: agent.run.id,
+            providerSessionId: session.session.id,
+            provider: "CODEX",
+            entry: {
+              actionKey: `entry-${index.toString()}`,
+              kind: "AGENT_TEXT",
+              label: null,
+              detail: `Entry ${index.toString()}`,
+              status: null,
+              terminal: true,
+              truncated: false,
+            },
+          },
+        });
+      }
+
+      // Completes the session so startup reconciliation does not mark this run degraded on its own
+      // account -- unrelated to what either test below proves, and it would make `degraded`
+      // ambiguous in exactly the way an earlier fixture in this file already had to guard against.
+      state.execute({
+        schemaVersion: 1,
+        commandId: "complete-discovery",
+        correlationId: "correlation-complete-discovery",
+        actor: { type: "SYSTEM", id: "session-loop" },
+        type: "APPLY_PROVIDER_OUTCOME",
+        payload: {
+          dispatchId: pipeline.dispatch.id,
+          provider: "CODEX",
+          outcome: { type: "COMPLETED", summary: "Discovery is complete." },
+          template,
+          resultTree: null,
+          sessionCompletion: { providerSessionId: session.session.id, usage: null },
+        },
+      });
+      return workItemId;
+    } finally {
+      state.close();
+    }
+  };
+
+  // Fix round 3 (final review), reproduced through the real route. A feed of ordinary entries with
+  // DISTINCT timestamps -- no ties, nothing evicted, nothing degraded -- collapsed on its second
+  // page as soon as it held `2 * MAX_ACTIVITY_PAGE_SIZE` entries: page 0 served entries 0-199 with a
+  // cursor, and page 1 served entries 0-199 AGAIN with `gap: true`, because the read-ahead of one
+  // row was entirely spent on the cursor's own row and the route then rewound on the composite
+  // `gap`. On the client, the rewound page still carried a `nextCursor`, so "Show more" appended the
+  // same 200 entries forever. One AgentRun alone may hold 1,000 entries before eviction, so this was
+  // reachable by an ordinary busy task.
+  it("pages a feed larger than two pages without repeating a page or flagging a false gap", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity long feed тест "));
+    directories.push(directory);
+    // Exactly the threshold the review reproduced at: 399 passed, 400 failed.
+    const entryCount = 400;
+    const workItemId = await seedRecordedFeed(directory, entryCount);
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: join(directory, "state.sqlite"),
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
+    const session = await authenticate(daemon, token);
+
+    // Follows `nextCursor` the way the client's own infinite query does, with no gap-aware special
+    // casing: every page's entries are APPENDED, exactly as `useWorkItemActivity` flattens pages.
+    const served: { readonly id: string; readonly seq: number }[] = [];
+    let cursor: string | null = null;
+    let sawGap = false;
+    for (let page = 0; page < 6; page += 1) {
+      const url =
+        cursor === null
+          ? `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`
+          : `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity?after=${encodeURIComponent(cursor)}`;
+      const response = await fetch(url, { headers: { cookie: session.cookie } });
+      expect(response.status).toBe(200);
+      const body = agentRunActivityPageSchema.parse(await response.json());
+      served.push(...body.entries.map((entry) => ({ id: entry.id, seq: entry.seq })));
+      if (body.gap) sawGap = true;
+      if (body.nextCursor === null) break;
+      cursor = body.nextCursor;
+    }
+
+    // No repeats: the rewind is what produced them, and it must not fire on a feed whose cursor was
+    // never lost. Under the defect this was 400 served ids with only 200 distinct ones.
+    expect(new Set(served.map((entry) => entry.id)).size).toBe(served.length);
+    // Every entry, once, in the order it was recorded. `seq` is the reported source's own per-run
+    // counter, so 1..400 unbroken is a stronger claim than a count: it fails on a page served twice,
+    // on a page skipped, and on a page served out of order.
+    expect(served.map((entry) => entry.seq)).toEqual(
+      Array.from({ length: entryCount }, (_, index) => index + 1),
+    );
+    // Nothing here is actually incomplete: no tie, no eviction, no unresolvable run. A `gap` on this
+    // feed is the false positive, not an honest warning.
+    expect(sawGap).toBe(false);
+  });
+
+  // The other half of the same separation, and the behaviour ADR-0034 fixed in the first place: when
+  // the cursor's own row genuinely is NOT in the window, the route refetches unfiltered and serves
+  // the feed from the oldest entry it still holds, flagged `gap`. The cursor below names a real
+  // timestamp -- the third entry's -- with an id no row carries, so the bounded `>= cursor.at`
+  // window legitimately holds only entries 3..5 and the rewind is what puts 1 and 2 back. A route
+  // that stopped rewinding would answer with three entries here instead of five, which is what makes
+  // this fixture able to tell the two apart.
+  it("restarts from the oldest entry it still holds, flagged gap, when the cursor names a position the window does not hold", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail work item activity lost cursor тест "));
+    directories.push(directory);
+    const workItemId = await seedRecordedFeed(directory, 5);
+
+    const token = bootstrapToken();
+    daemon = await startDaemon({
+      bootstrapToken: token,
+      logger: false,
+      stateDatabasePath: join(directory, "state.sqlite"),
+      verificationArtifactsDirectory: join(directory, "verification-output"),
+    });
+    const session = await authenticate(daemon, token);
+    const activityUrl = `${daemon.baseUrl}/api/v1/work-items/${workItemId}/activity`;
+    const firstPage = agentRunActivityPageSchema.parse(
+      await (await fetch(activityUrl, { headers: { cookie: session.cookie } })).json(),
+    );
+    const thirdEntry = firstPage.entries[2];
+    if (thirdEntry === undefined) throw new Error("Expected five recorded entries");
+    const forgedCursor = Buffer.from(
+      JSON.stringify({ at: thirdEntry.at, origin: "PROVIDER_REPORTED", id: "agent-run-activity-evicted" }),
+    ).toString("base64url");
+
+    const response = await fetch(`${activityUrl}?after=${encodeURIComponent(forgedCursor)}`, {
+      headers: { cookie: session.cookie },
+    });
+    expect(response.status).toBe(200);
+    const body = agentRunActivityPageSchema.parse(await response.json());
+
+    expect(body.gap).toBe(true);
+    expect(body.entries.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 });

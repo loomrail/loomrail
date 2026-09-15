@@ -11,6 +11,7 @@ import {
   resolveAuditedCallsForRead,
   resolveReferencedRuns,
   MAX_ACTIVITY_PAGE_SIZE,
+  activitySourceFetchLimit,
   type RunActivityContext,
   type RunLookup,
 } from "../src/agent-run-activity.js";
@@ -63,7 +64,6 @@ const runContext = (overrides: Partial<RunActivityContext> = {}): RunActivityCon
   agentRunId: "agent-run-1",
   provider: "CODEX",
   stage: "IMPLEMENT",
-  ordinal: 1,
   ...overrides,
 });
 
@@ -134,7 +134,7 @@ describe("cursor codec", () => {
 
 describe("buildAgentRunActivityPage", () => {
   it("attaches origin by source table and merges both into one deterministic page", () => {
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" })],
       runs: [runContext()],
       reportedRows: [reportedRow({ id: "a1", observedAt: "2026-09-14T10:00:00.000Z" })],
@@ -151,7 +151,7 @@ describe("buildAgentRunActivityPage", () => {
   });
 
   it("describes an audited entry from the workspace tool call's own fields, not a provider guess", () => {
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [
         workspaceToolCall({
           id: "w1",
@@ -183,7 +183,7 @@ describe("buildAgentRunActivityPage", () => {
   });
 
   it("carries a null failureCode for a reported entry, which has no such column to read", () => {
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [],
       runs: [runContext()],
       reportedRows: [reportedRow({ id: "a1" })],
@@ -195,7 +195,7 @@ describe("buildAgentRunActivityPage", () => {
   });
 
   it("passes omittedCount and degraded through from the reported source untouched", () => {
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [],
       runs: [],
       reportedRows: [],
@@ -210,7 +210,7 @@ describe("buildAgentRunActivityPage", () => {
   it("surfaces the already-aggregated omittedCount unchanged from a page spanning several runs", () => {
     // LIST_WORK_ITEM_ACTIVITY sums omittedCount across the WorkItem's runs in SQL (Task 1); this
     // pins that building a real multi-run page around that number does not re-derive or clobber it.
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [
         workspaceToolCall({ id: "w1", agentRunId: "agent-run-1" }),
         workspaceToolCall({ id: "w2", agentRunId: "agent-run-2", startedAt: "2026-09-14T10:00:05.000Z" }),
@@ -228,7 +228,7 @@ describe("buildAgentRunActivityPage", () => {
     // The reported row this cursor once pointed at is gone from `reportedRows` -- eviction, in
     // production -- and nothing here can tell that apart from a cursor that never existed. Both get
     // the same safe answer.
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" })],
       runs: [runContext()],
       reportedRows: [],
@@ -243,7 +243,7 @@ describe("buildAgentRunActivityPage", () => {
   it("does not set gap when the cursor names a position that is still present", () => {
     const first = workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" });
     const second = workspaceToolCall({ id: "w2", startedAt: "2026-09-14T10:00:05.000Z" });
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [first, second],
       runs: [runContext()],
       reportedRows: [],
@@ -266,7 +266,7 @@ describe("buildAgentRunActivityPage", () => {
     const seen: string[] = [];
     let cursor: ReturnType<typeof decodeCursor> = null;
     for (let guard = 0; guard < 10; guard += 1) {
-      const page = buildAgentRunActivityPage({
+      const { page } = buildAgentRunActivityPage({
         auditedCalls: calls,
         runs: [runContext()],
         reportedRows: [],
@@ -293,7 +293,7 @@ describe("buildAgentRunActivityPage", () => {
         startedAt: new Date(Date.UTC(2026, 8, 14, 10, 0, 0) + index).toISOString(),
       }),
     );
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: calls,
       runs: [runContext()],
       reportedRows: [],
@@ -314,7 +314,7 @@ describe("buildAgentRunActivityPage", () => {
     // or the workspace-tool gateway is ever wired to -- so a MOCK run has no audited rows to map and
     // `provider: null` must not stop its (perfectly normal) reported rows from reaching the page. Its
     // run must still be supplied, though -- a reported row still needs its stage resolved.
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [],
       runs: [runContext({ provider: null })],
       reportedRows: [reportedRow({ id: "a1" })],
@@ -373,7 +373,7 @@ describe("buildAgentRunActivityPage", () => {
   it("orders entries by time across a run boundary, never by which run each one belongs to", () => {
     // Two runs' entries interleave in time (run2, run1, run2, run1); the merged page must read out
     // in that chronological order, proving the run boundary is not a grouping the merge respects.
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [
         workspaceToolCall({
           id: "w-run2-early",
@@ -424,7 +424,7 @@ describe("buildAgentRunActivityPage", () => {
     const seen: string[] = [];
     let cursor: ReturnType<typeof decodeCursor> = null;
     for (let guard = 0; guard < 10; guard += 1) {
-      const page = buildAgentRunActivityPage({
+      const { page } = buildAgentRunActivityPage({
         auditedCalls: calls,
         reportedRows: [],
         runs,
@@ -441,7 +441,7 @@ describe("buildAgentRunActivityPage", () => {
   });
 
   it("labels each entry with its own run's stage and agentRunId, never another run's", () => {
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [
         workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
       ],
@@ -462,38 +462,11 @@ describe("buildAgentRunActivityPage", () => {
     ]);
   });
 
-  // Fix round 1 on Task 3: the UI groups the merged feed by run and needs a number to label the
-  // group with -- the run's own `agent_runs.ordinal`, not one the reader invents. Both entry
-  // builders (audited and reported) must carry it through; distinct, non-sequential values (4 and
-  // 9, not 1 and 2) so a caller that numbered runs by page order instead of reading `ordinal` off
-  // the resolved run would fail this test.
-  it("labels each entry with its own run's ordinal, from the resolved AgentRun itself", () => {
-    const page = buildAgentRunActivityPage({
-      auditedCalls: [
-        workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
-      ],
-      reportedRows: [
-        reportedRow({ id: "a1", agentRunId: "agent-run-2", observedAt: "2026-09-14T10:00:01.000Z" }),
-      ],
-      runs: [
-        runContext({ agentRunId: "agent-run-1", ordinal: 4 }),
-        runContext({ agentRunId: "agent-run-2", ordinal: 9 }),
-      ],
-      omittedCount: 0,
-      degraded: false,
-      cursor: null,
-    });
-    expect(page.entries.map((entry) => [entry.id, entry.ordinal])).toEqual([
-      ["w1", 4],
-      ["a1", 9],
-    ]);
-  });
-
   it("restarts an audited run's own seq at 1, matching the contract's per-run promise", () => {
     // The contract's own doc comment on `seq` promises it is monotonic "within a run's own source".
     // A global running count across the whole page would give agent-run-2's first call seq 3 instead
     // of 1, breaking that promise the moment a page holds more than one run's audited calls.
-    const page = buildAgentRunActivityPage({
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [
         workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
         workspaceToolCall({ id: "w2", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:01.000Z" }),
@@ -513,14 +486,41 @@ describe("buildAgentRunActivityPage", () => {
   });
 
   it("flags gap when a source hits its own read-ahead cap and the page still claims there is nothing more", () => {
-    // Fix round 2: a source that returns exactly `pageSize + 1` rows (the caller's own read-ahead
-    // bound) might hold more beyond what it fetched. Three reported rows share one timestamp here,
-    // matching `pageSize + 1` (2 + 1); the cursor names the middle one, so the page's own slice
-    // lands exactly at the end of what was fetched -- the same shape a run of same-timestamp ties
-    // outlasting the caller's `>= cursor.at` fetch window produces in production (see this
-    // function's own doc comment). `nextCursor: null` here would silently claim completeness.
+    // Fix round 2: a source that comes back at the caller's read-ahead cap
+    // (`activitySourceFetchLimit(pageSize)`) might hold more beyond what it fetched. Four reported
+    // rows share one timestamp here, matching that cap (2 + 2); the cursor names the second of
+    // them, so the page's own slice lands exactly at the end of what was fetched -- the same shape
+    // a run of same-timestamp ties outlasting the caller's `>= cursor.at` fetch window produces in
+    // production (see this function's own doc comment). `nextCursor: null` here would silently
+    // claim completeness. The page is still served as it stands: the cursor WAS found, so this is
+    // not the route's rewind case.
     const tiedAt = "2026-09-14T10:00:00.000Z";
-    const page = buildAgentRunActivityPage({
+    const { page, cursorLost } = buildAgentRunActivityPage({
+      auditedCalls: [],
+      runs: [runContext()],
+      reportedRows: [
+        reportedRow({ id: "r1", observedAt: tiedAt }),
+        reportedRow({ id: "r2", observedAt: tiedAt }),
+        reportedRow({ id: "r3", observedAt: tiedAt }),
+        reportedRow({ id: "r4", observedAt: tiedAt }),
+      ],
+      omittedCount: 0,
+      degraded: false,
+      cursor: { at: tiedAt, origin: "PROVIDER_REPORTED", id: "r2" },
+      pageSize: 2,
+    });
+    expect(page.gap).toBe(true);
+    expect(cursorLost).toBe(false);
+    expect(page.entries.map((entry) => entry.id)).toEqual(["r3", "r4"]);
+  });
+
+  it("does not flag gap when a source's own row count falls short of its read-ahead cap", () => {
+    // Same shape as the test above, one row short of the cap (3, not
+    // `activitySourceFetchLimit(2)` = 4): the source's own fetch could not have been truncated, so
+    // there is nothing to doubt about `nextCursor: null` here -- this is what keeps the guard from
+    // firing on an ordinary, genuinely-complete last page.
+    const tiedAt = "2026-09-14T10:00:00.000Z";
+    const { page } = buildAgentRunActivityPage({
       auditedCalls: [],
       runs: [runContext()],
       reportedRows: [
@@ -530,33 +530,133 @@ describe("buildAgentRunActivityPage", () => {
       ],
       omittedCount: 0,
       degraded: false,
-      cursor: { at: tiedAt, origin: "PROVIDER_REPORTED", id: "r2" },
-      pageSize: 2,
-    });
-    expect(page.gap).toBe(true);
-    expect(page.entries.map((entry) => entry.id)).toEqual(["r3"]);
-  });
-
-  it("does not flag gap when a source's own row count falls short of its read-ahead cap", () => {
-    // Same shape as the test above, one row short of the cap (2, not pageSize + 1 = 3): the
-    // source's own fetch could not have been truncated, so there is nothing to doubt about
-    // `nextCursor: null` here -- this is what keeps the new guard from firing on an ordinary,
-    // genuinely-complete last page.
-    const tiedAt = "2026-09-14T10:00:00.000Z";
-    const page = buildAgentRunActivityPage({
-      auditedCalls: [],
-      runs: [runContext()],
-      reportedRows: [
-        reportedRow({ id: "r1", observedAt: tiedAt }),
-        reportedRow({ id: "r2", observedAt: tiedAt }),
-      ],
-      omittedCount: 0,
-      degraded: false,
       cursor: { at: tiedAt, origin: "PROVIDER_REPORTED", id: "r1" },
       pageSize: 2,
     });
     expect(page.gap).toBe(false);
-    expect(page.entries.map((entry) => entry.id)).toEqual(["r2"]);
+    expect(page.entries.map((entry) => entry.id)).toEqual(["r2", "r3"]);
+  });
+
+  // `cursorLost` is reported apart from `gap`, and only it may make the route rewind. The two tests
+  // above pin `cursorLost: false` on a page whose `gap` is set by the read-ahead cap; this pins the
+  // other side, so a mutant that simply aliased one field to the other cannot pass both.
+  it("reports cursorLost, not merely gap, when the cursor names a position the window does not hold", () => {
+    const { page, cursorLost } = buildAgentRunActivityPage({
+      auditedCalls: [workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" })],
+      runs: [runContext()],
+      reportedRows: [],
+      omittedCount: 0,
+      degraded: false,
+      cursor: { at: "2026-09-14T09:00:00.000Z", origin: "PROVIDER_REPORTED", id: "evicted-1" },
+    });
+    expect(cursorLost).toBe(true);
+    expect(page.gap).toBe(true);
+  });
+});
+
+// The regression the unit "full sweep" test above could not see. That test hands the SAME complete
+// array to every page, so it never models the caller's fetch window at all -- and the defect lived
+// entirely in the interaction between that window and the cursor: the window is `>= cursor.at`, so
+// it re-includes the cursor's own row, `locateCursor` steps past it, and with a read-ahead of only
+// `pageSize + 1` exactly `pageSize` rows were left. `endIndex === merged.length`, `nextCursor` null,
+// window capped -- `gap`, on a feed that was merely long. Every feed of `2 * pageSize` entries or
+// more failed on its second page (399 passed, 400 failed at the real page size), and the route then
+// rewound on that `gap` and re-served the first page forever.
+//
+// These walk real pages through a model of the real window, built from the production
+// `activitySourceFetchLimit` rather than a literal, so the two cannot drift apart again.
+describe("buildAgentRunActivityPage through the caller's real fetch window", () => {
+  // Exactly what apps/daemon/src/server.ts's `fetchWindow` does to one source: rows at or after the
+  // cursor's own timestamp, capped at the read-ahead limit.
+  const windowOf = (
+    rows: readonly WorkItemActivityRow[],
+    after: string | undefined,
+    pageSize: number,
+  ): readonly WorkItemActivityRow[] =>
+    (after === undefined ? rows : rows.filter((row) => row.observedAt >= after)).slice(
+      0,
+      activitySourceFetchLimit(pageSize),
+    );
+
+  const sweep = (
+    rows: readonly WorkItemActivityRow[],
+    pageSize: number,
+  ): { readonly seen: readonly string[]; readonly gaps: number; readonly cursorsLost: number } => {
+    const seen: string[] = [];
+    let gaps = 0;
+    let cursorsLost = 0;
+    let cursor: ReturnType<typeof decodeCursor> = null;
+    for (let guard = 0; guard < rows.length + 5; guard += 1) {
+      const { page, cursorLost } = buildAgentRunActivityPage({
+        auditedCalls: [],
+        runs: [runContext()],
+        reportedRows: windowOf(rows, cursor === null ? undefined : cursor.at, pageSize),
+        omittedCount: 0,
+        degraded: false,
+        cursor,
+        pageSize,
+      });
+      seen.push(...page.entries.map((entry) => entry.id));
+      if (page.gap) gaps += 1;
+      if (cursorLost) cursorsLost += 1;
+      if (page.nextCursor === null) break;
+      cursor = decodeCursor(page.nextCursor);
+    }
+    return { seen, gaps, cursorsLost };
+  };
+
+  const distinctRows = (count: number): readonly WorkItemActivityRow[] =>
+    Array.from({ length: count }, (_, index) =>
+      reportedRow({
+        id: `r${index.toString().padStart(4, "0")}`,
+        seq: index + 1,
+        observedAt: new Date(Date.UTC(2026, 8, 14, 10, 0, 0) + index).toISOString(),
+      }),
+    );
+
+  // `2 * pageSize` is the exact threshold the old read-ahead broke at; one below it passed.
+  it.each([
+    ["one page exactly", 4],
+    ["one short of the old threshold", 7],
+    ["the old threshold itself", 8],
+    ["well past it", 23],
+  ])("delivers every entry once, in order, with no gap (%s)", (_label, total) => {
+    const rows = distinctRows(total);
+    const { seen, gaps, cursorsLost } = sweep(rows, 4);
+
+    expect(seen).toEqual(rows.map((row) => row.id));
+    expect(gaps).toBe(0);
+    expect(cursorsLost).toBe(0);
+  });
+
+  it("delivers every entry once at the real page size, across the 400-entry threshold", () => {
+    // The size the route actually runs at, at the count the review reproduced through the real
+    // route: page 0 returned entries 0-199 with a cursor, page 1 returned entries 0-199 again with
+    // `gap: true`, and the client's "Show more" then appended the same 200 entries forever.
+    const rows = distinctRows(2 * MAX_ACTIVITY_PAGE_SIZE);
+    const { seen, gaps } = sweep(rows, MAX_ACTIVITY_PAGE_SIZE);
+
+    expect(seen).toEqual(rows.map((row) => row.id));
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(gaps).toBe(0);
+  });
+
+  // The honest half of the trade-off, through the same window: a block of entries sharing one exact
+  // timestamp can outlast the `>= cursor.at` window, which then cannot slide. The sweep must still
+  // never repeat an entry, and must announce the hole rather than claim a clean end.
+  it("announces a gap instead of claiming an end when one timestamp fills the whole window", () => {
+    const tiedAt = "2026-09-14T10:00:00.000Z";
+    const rows = Array.from({ length: 12 }, (_, index) =>
+      reportedRow({ id: `t${index.toString().padStart(2, "0")}`, seq: index + 1, observedAt: tiedAt }),
+    );
+    const { seen, gaps, cursorsLost } = sweep(rows, 4);
+
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen).toEqual(rows.slice(0, seen.length).map((row) => row.id));
+    expect(gaps).toBeGreaterThan(0);
+    // Still not a lost cursor: every page found the row its cursor named. The route must not rewind
+    // here -- that is the defect this separation exists to stop.
+    expect(cursorsLost).toBe(0);
   });
 });
 
@@ -623,30 +723,27 @@ describe("resolveReferencedRuns", () => {
       provider: string;
       stageAttemptId: string;
       stage: RunActivityContext["stage"];
-      ordinal: number;
     }> = {},
   ): RunLookup => {
     const provider = overrides.provider ?? "CODEX";
     const stageAttemptId = overrides.stageAttemptId ?? "stage-attempt-1";
     const stage = overrides.stage ?? "IMPLEMENT";
-    const ordinal = overrides.ordinal ?? 1;
     return {
-      getAgentRun: (agentRunId) =>
-        agentRunId === "agent-run-1" ? { stageAttemptId, provider, ordinal } : undefined,
+      getAgentRun: (agentRunId) => (agentRunId === "agent-run-1" ? { stageAttemptId, provider } : undefined),
       getStageAttempt: (id) => (id === stageAttemptId ? { stage } : undefined),
     };
   };
 
-  it("resolves provider, stage and ordinal for every referenced run through the lookup callbacks", () => {
-    // Non-sequential, distinct ordinals (3, 7) rather than 1 and 2 -- a caller that mistakenly
-    // numbered runs by their position in `agentRunIds` instead of reading `getAgentRun`'s own
-    // `ordinal` would produce 1 and 2 here, not 3 and 7, so this fixture actually discriminates.
+  it("resolves provider and stage for every referenced run through the lookup callbacks", () => {
+    // Two runs on DIFFERENT stages and DIFFERENT providers, so a mutant that resolved one run and
+    // reused its answer for the rest -- or that paired a run with the wrong StageAttempt -- cannot
+    // pass: PLAN/CODEX and REVIEW/CLAUDE_CODE are distinguishable in both fields.
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX", ordinal: 3 }
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
           : agentRunId === "agent-run-2"
-            ? { stageAttemptId: "stage-attempt-2", provider: "CLAUDE_CODE", ordinal: 7 }
+            ? { stageAttemptId: "stage-attempt-2", provider: "CLAUDE_CODE" }
             : undefined,
       getStageAttempt: (id) =>
         id === "stage-attempt-1"
@@ -658,16 +755,14 @@ describe("resolveReferencedRuns", () => {
     const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
     expect(result.unresolvedRunIds.size).toBe(0);
     expect(result.runs).toEqual([
-      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN", ordinal: 3 },
-      { agentRunId: "agent-run-2", provider: "CLAUDE_CODE", stage: "REVIEW", ordinal: 7 },
+      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" },
+      { agentRunId: "agent-run-2", provider: "CLAUDE_CODE", stage: "REVIEW" },
     ]);
   });
 
   it("resolves a null provider for a MOCK run instead of guessing a live one", () => {
     const result = resolveReferencedRuns(["agent-run-1"], workingLookup({ provider: "MOCK" }));
-    expect(result.runs).toEqual([
-      { agentRunId: "agent-run-1", provider: null, stage: "IMPLEMENT", ordinal: 1 },
-    ]);
+    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: null, stage: "IMPLEMENT" }]);
     expect(result.unresolvedRunIds.size).toBe(0);
   });
 
@@ -695,7 +790,7 @@ describe("resolveReferencedRuns", () => {
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX", ordinal: 1 }
+          ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
           : undefined,
       getStageAttempt: () => undefined,
     };
@@ -708,16 +803,14 @@ describe("resolveReferencedRuns", () => {
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX", ordinal: 1 }
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
           : agentRunId === "agent-run-2"
-            ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX", ordinal: 1 }
+            ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
             : undefined,
       getStageAttempt: (id) => (id === "stage-attempt-1" ? { stage: "PLAN" } : undefined),
     };
     const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
-    expect(result.runs).toEqual([
-      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN", ordinal: 1 },
-    ]);
+    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" }]);
     expect(result.unresolvedRunIds).toEqual(new Set(["agent-run-2"]));
   });
 });

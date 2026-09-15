@@ -1,4 +1,4 @@
-import type { AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
+import type { AgentRunActivityPage, WorkItem, WorkflowSnapshot } from "@loomrail/contracts";
 
 // Plain function values, not components -- kept out of RunActivitySection.tsx itself (a component
 // file react-refresh expects to export only components), the same reason isWorkItemTimelineEvent
@@ -12,8 +12,8 @@ import type { AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
 // itself, so both are read across every page loaded so far.
 //
 // `gap` is purely per-page, and since fix round 2 on Task 2 it has two triggers -- the page's cursor
-// named a position no longer held, or a source returned its whole read-ahead and the page still ended
-// with no next cursor. Neither can fire on a first page.
+// named a position no longer held, or a source came back at its read-ahead cap and the page still
+// ended with no next cursor. Neither can fire on a first page.
 //
 // `degraded` is mostly a task-level fact (the same aggregate, and nothing ever clears the stored
 // flag), but the route ORs two per-PAGE facts into it as well: a run whose stage would not resolve,
@@ -35,11 +35,31 @@ export const anyPageIsDegraded = (pages: readonly AgentRunActivityPage[]): boole
 // `AttemptSessionsPanel` in WorkbenchPage.tsx makes for its own "no sessions yet" case
 // (`if (sessions.length === 0) return null;`).
 //
-// `currentStage` is the signal, not a resolved AgentRun id: it is `null` only before START_WORKFLOW
-// ever runs (packages/domain/src/index.ts) and stays set through every later stage transition AND
-// through a budget pause (packages/domain/src/workflow.ts sets `currentStage: stageAttempt.stage`
-// on both the transition and the pause path) -- so unlike the AgentRun-id resolution chain this
-// gate used to depend on, it cannot flicker back to "unknown" while the task is merely paused
-// between attempts, and needs no extra query to read.
-export const hasStartedWorkflow = (item: Pick<WorkItem, "currentStage">): boolean =>
-  item.currentStage !== null;
+// TWO signals, because `currentStage` alone is not the one this gate needs. It is set the moment
+// START_WORKFLOW runs and survives every later stage transition and a budget pause -- which is why
+// it replaced the AgentRun-resolution chain that flickered while a task was merely paused. But it
+// is NOT "never cleared again", as an earlier comment here claimed: three owner-facing CANCEL
+// decisions put it back to `null` on a task that provably has history --
+// `packages/domain/src/qa-correction.ts` (decideQACorrectionGate's CANCEL),
+// `packages/domain/src/verification-correction.ts` (both correction gates' CANCEL). All three fire
+// late in a pipeline, so on `currentStage` alone the whole account of what the agents did vanished
+// the moment the owner cancelled -- the same narrative disappearance spec 128 exists to close,
+// reintroduced on a different axis.
+//
+// `state === "CANCELLED"` is not a usable stand-in either: `decideMove`
+// (packages/domain/src/index.ts) allows BACKLOG -> CANCELLED directly, so a task cancelled before it
+// ever ran reaches CANCELLED with no history at all.
+//
+// The second signal is therefore the workflow snapshot's own `run`. A `pipeline_runs` row exists for
+// a WorkItem if and only if START_WORKFLOW has run for it at least once (`decideStartPipeline`
+// creates it; nothing in packages/persistence-sqlite ever deletes from `pipeline_runs`), and
+// `readWorkflowSnapshot` returns `run: null` precisely when the WorkItem has none. It is the direct
+// answer to "did this task ever run", where `currentStage` only ever answered "is it somewhere in a
+// pipeline right now". `currentStage` stays first because it needs no query at all and settles the
+// overwhelmingly common cases; `snapshot === undefined` (still loading) is treated as "not yet
+// known", so the section appears once the answer arrives rather than flashing an empty card at a
+// task that never ran.
+export const hasStartedWorkflow = (
+  item: Pick<WorkItem, "currentStage">,
+  workflow: Pick<WorkflowSnapshot, "run"> | undefined,
+): boolean => item.currentStage !== null || (workflow !== undefined && workflow.run !== null);

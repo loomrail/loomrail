@@ -13,7 +13,7 @@ import { Badge, Button, Icon, InspectorSection, Skeleton } from "@loomrail/ui";
 import { LocalConnectionRecovery } from "./LocalConnectionRecovery";
 import { anyPageHasGap, anyPageIsDegraded, hasStartedWorkflow } from "./runActivityPaging";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
-import { useAgentFleet, useWorkItemActivity } from "../workspace";
+import { useAgentFleet, useWorkItemActivity, useWorkItemWorkflow } from "../workspace";
 
 // `workspace_tool_calls.operation` is a closed, NOT NULL SQL enum (migration 0055): a
 // DAEMON_AUDITED entry's `label` is always one of these six codes. Checked at runtime, per this
@@ -154,7 +154,6 @@ const RunActivityEntryRow = ({
 type RunActivityGroup = {
   readonly agentRunId: string;
   readonly stage: AgentRunActivityEntry["stage"];
-  readonly ordinal: number;
   readonly entries: readonly AgentRunActivityEntry[];
 };
 
@@ -164,23 +163,21 @@ type OpenRunActivityGroup = Omit<RunActivityGroup, "entries"> & { entries: Agent
 
 /**
  * Consecutive entries sharing an `agentRunId` form one group (spec 128: "соседние записи с одним
- * agentRunId образуют группу"), headed by that run's stage and its own `ordinal`. Deliberately NOT
- * a `groupBy(agentRunId)` -- the merged feed is chronological across the WorkItem's whole run
- * history, so two runs' entries are never expected to interleave in practice, but if they somehow
- * did, folding every entry that shares a run id back into one group (wherever it appears in the
- * list) would misrepresent the feed's own order. Walking the list once and starting a new group
- * only when the run id actually changes is what "consecutive" means here.
+ * agentRunId образуют группу"), headed by that run's stage. Deliberately NOT a `groupBy(agentRunId)`
+ * -- the merged feed is chronological across the WorkItem's whole run history, so two runs' entries
+ * are never expected to interleave in practice, but if they somehow did, folding every entry that
+ * shares a run id back into one group (wherever it appears in the list) would misrepresent the
+ * feed's own order. Walking the list once and starting a new group only when the run id actually
+ * changes is what "consecutive" means here.
  *
- * `ordinal` is read straight off the entry (`agent_runs.ordinal`, resolved once per run by the
- * daemon -- apps/daemon/src/agent-run-activity.ts), not computed here: fix round 1 on Task 3
- * replaced an earlier, client-computed "first appearance in this page" count with this, the run's
- * real backend ordinal. Fix round 2 then corrected WHICH label names it -- `agent_runs.ordinal`
- * looked interchangeable with the Workflow panel's "Session N" (`provider_sessions.ordinal`), but
- * the two diverge the moment a context handoff starts a second ProviderSession under the same
- * still-running AgentRun (see `RunActivityGroupSection` below for why neither existing panel label
- * fits). Reading `ordinal` off the entry, instead of recomputing it, is also what keeps a run's two
- * groups (the non-consecutive case above) trivially showing the same number: they share the same
- * underlying field, not a separately tracked counter that could drift.
+ * The heading carries the stage and nothing else. Two earlier cuts numbered the group -- first from
+ * a client-side count, then from the run's own `agent_runs.ordinal` -- on the premise that a number
+ * is what tells two adjacent groups of the same stage apart. It is not: that column is
+ * `UNIQUE (stage_attempt_id, ordinal)`, so a stage RETRY opens a new StageAttempt whose first
+ * AgentRun is ordinal 1 again, and the two adjacent groups for two attempts of the same stage would
+ * both read "Run 1". A number that repeats across different runs is worse than no number, and the
+ * groups are already ordered by their entries' timestamps, so it is gone from the contract too
+ * (packages/contracts/src/activity.ts).
  */
 const groupEntriesByRun = (entries: readonly AgentRunActivityEntry[]): readonly RunActivityGroup[] => {
   const groups: OpenRunActivityGroup[] = [];
@@ -190,12 +187,7 @@ const groupEntriesByRun = (entries: readonly AgentRunActivityEntry[]): readonly 
       openGroup.entries.push(entry);
       continue;
     }
-    groups.push({
-      agentRunId: entry.agentRunId,
-      stage: entry.stage,
-      ordinal: entry.ordinal,
-      entries: [entry],
-    });
+    groups.push({ agentRunId: entry.agentRunId, stage: entry.stage, entries: [entry] });
   }
   return groups;
 };
@@ -215,18 +207,6 @@ const RunActivityGroupSection = ({
         tab stop. */}
     <div className="run-activity__group-heading">
       <span className="run-activity__group-stage">{t(stageKey(group.stage))}</span>
-      {/* Fix round 2: NOT workflow.sessions.ordinal ("Session N"). That labels
-          `provider_sessions.ordinal`, a different counter from `agent_runs.ordinal` (this
-          group's own `ordinal`) -- both are `UNIQUE (stage_attempt_id, ordinal)`, but they diverge
-          the moment a context handoff starts a second ProviderSession under the same still-running
-          AgentRun, so a group headed "Session 1" could cover entries the Workflow panel attributes
-          to Session 2. Also not workflow.sessions.attemptHeading ("Attempt N"): that labels
-          `stage_attempts.attempt`, scoped per STAGE (`UNIQUE (pipeline_run_id, stage, attempt)`),
-          not per AgentRun within one attempt. Neither panel has a label for this exact number, so
-          this is its own key, naming what it actually is instead of borrowing a wrong one. */}
-      <span className="run-activity__group-ordinal">
-        {t("runActivity.group.ordinal", { ordinal: group.ordinal })}
-      </span>
     </div>
     <ol className="run-activity__group-entries">
       {group.entries.map((entry) => (
@@ -248,8 +228,10 @@ export type RunActivityViewProps = {
   // The newest-first hint reused from Agent Fleet's own read (Task 10's
   // LIST_LATEST_AGENT_RUN_ACTIVITY, via useAgentFleet), preferred over the merged feed's own last
   // loaded row for the collapsed summary -- see the precedence note beside `summary` below.
-  // `null` once this AgentRun has no live Fleet entry (typically because it finished), at which
-  // point the merged feed's own last loaded entry takes over.
+  // `null` once this WORK ITEM has no live Fleet entry (typically because its pipeline finished or
+  // was cancelled); the Fleet lookup is keyed by `workItem.id`, not by a resolved AgentRun, so this
+  // turning null is a fact about the task, not about one of its runs. The merged feed's own last
+  // loaded entry takes over at that point.
   collapsedAction: AgentFleetLatestAction | null;
   degraded: boolean;
   /** Oldest-first, whatever has been loaded from `/work-items/:workItemId/activity` so far. */
@@ -286,13 +268,13 @@ export const RunActivityView = ({
   const latestEntry = entries.at(-1);
   // `collapsedAction` wins whenever it is available: it is Task 10's own newest-first read, while
   // `latestEntry` is only the tail of an oldest-first page -- correct as "the latest of what has
-  // loaded", but not provably "the latest, full stop" for a run with more history than one page.
-  // Only once this AgentRun has left the Fleet (collapsedAction turns null -- typically because it
-  // finished) does the merged feed's own last loaded entry take over.
+  // loaded", but not provably "the latest, full stop" for a task with more history than one page.
+  // Only once this WorkItem has left the Fleet (collapsedAction turns null -- typically because its
+  // pipeline finished) does the merged feed's own last loaded entry take over.
   //
-  // When it does, and more of the feed exists beyond this loaded page (`hasMore`), that entry is
+  // When it does, and more of the feed exists beyond the loaded pages (`hasMore`), that entry is
   // NOT provably the latest action either -- it is only the newest thing loaded so far, oldest-
-  // first, from a run with no live Fleet entry to check against. `approximate` says so instead of
+  // first, from a task with no live Fleet entry to check against. `approximate` says so instead of
   // presenting a possibly-stale row as a confident "this is what happened last".
   const summary =
     collapsedAction !== null
@@ -430,14 +412,18 @@ export const RunActivityView = ({
  * card. Fix round 1 on Task 3 restores this after an earlier cut of this component removed it
  * entirely -- that removal was itself chasing a real bug (a heuristic keyed on "does a live Fleet
  * entry or any loaded activity exist" hid the section for a task merely paused between attempts,
- * caught live by e2e/run-activity.spec.ts), but the fix overshot: `item.currentStage` is a signal
- * already on the prop, set the moment START_WORKFLOW runs and never cleared again -- including
- * through a budget pause, which is exactly the state that broke the previous heuristic -- so it
- * gates correctly without the AgentRun-resolution chain this whole rescope exists to avoid.
+ * caught live by e2e/run-activity.spec.ts), but the restored gate read `item.currentStage` alone,
+ * on a premise that turned out to be false: three CANCEL decisions in packages/domain set
+ * `currentStage` back to `null` late in a pipeline, which hid this whole section for every
+ * cancelled task. The gate now also consults the workflow snapshot's own `run` -- see
+ * `hasStartedWorkflow` for why that is the honest "did this task ever run" signal. The snapshot is
+ * the same `useWorkItemWorkflow(item.id)` the surrounding Task Cockpit already subscribes to
+ * (WorkbenchPage.tsx), so this costs one cache read, not one request.
  */
 export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
   const [expanded, setExpanded] = useState(false);
   const fleetQuery = useAgentFleet();
+  const workflowQuery = useWorkItemWorkflow(item.id);
   const fleetEntry = fleetQuery.data?.entries.find((entry) => entry.workItem.id === item.id) ?? null;
   const activityQuery = useWorkItemActivity(item.id);
   const entries = activityQuery.data?.pages.flatMap((page) => page.entries) ?? [];
@@ -448,7 +434,7 @@ export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Elem
   // per-page component, so the last page alone could un-announce it (runActivityPaging.ts).
   const degraded = anyPageIsDegraded(pages);
 
-  if (!hasStartedWorkflow(item)) return null;
+  if (!hasStartedWorkflow(item, workflowQuery.data)) return null;
 
   return (
     <RunActivityView
