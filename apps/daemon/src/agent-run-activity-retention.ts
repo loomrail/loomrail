@@ -8,7 +8,6 @@ const RETENTION_BATCH_SIZE = 1_000;
 const MAX_RETENTION_BATCHES_PER_STARTUP = 20;
 
 export type AgentRunActivityRetentionSummary = {
-  selected: number;
   entriesDeleted: number;
   stateRowsDeleted: number;
 };
@@ -18,12 +17,20 @@ export type AgentRunActivityRetentionSummary = {
  * bounds one run's Level 1 diagnostic feed, but the number of runs is unbounded, so the table grows
  * for the life of the database until something ages it out by closed-work date. This is that sweep.
  *
- * Mirrors cleanupExpiredBrowserQAArtifacts's shape -- injected clock, a bounded LIST query per
- * batch, a hard cap on batches per startup so a huge backlog cannot delay startup indefinitely --
- * but needs no retention log and no per-item command: unlike deleting a QA attachment's file, a row
- * delete is idempotent and self-evident from the row's own absence, so the query and the delete
- * (both in packages/persistence-sqlite) operate on a whole bounded page at once, in one short
- * transaction per batch, rather than one command per row.
+ * Mirrors cleanupExpiredBrowserQAArtifacts's shape -- injected clock, a hard cap on batches per
+ * startup so a huge backlog cannot delay startup indefinitely -- but needs no retention log and no
+ * per-item command, and no separate LIST-then-DELETE round trip either: unlike deleting a QA
+ * attachment's file, a row delete is idempotent and self-evident from the row's own absence, so
+ * `DELETE_EXPIRED_AGENT_RUN_ACTIVITY` (packages/persistence-sqlite) both selects and removes a whole
+ * bounded page in one short transaction per batch, rather than one command per row.
+ *
+ * There used to be a `LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES` query here before each delete, purely
+ * to report how many entries the delete was about to remove. It was dropped: its predicate is
+ * identical to the delete's own (see `deleteExpiredAgentRunActivityEntries`'s doc comment in
+ * persistence-sqlite), so it always found exactly what the delete went on to remove, and its count
+ * fed nothing but the completion log line below -- a whole extra query per batch, against a
+ * four-table join with a correlated `MAX(sequence)` subquery, for a number the delete's own result
+ * already carries. `entriesDeleted` is that same number now.
  *
  * DELETE_EXPIRED_AGENT_RUN_ACTIVITY also prunes any `agent_run_activity_state` counters row a page
  * just emptied (or that was already empty for a closed, expired run -- e.g. one whose recorder
@@ -37,14 +44,13 @@ export type AgentRunActivityRetentionSummary = {
  * they close over has no async API), and this sweep does no I/O of its own -- no file to delete, no
  * process to wait on -- so there is nothing here an `async` signature would actually be awaiting.
  *
- * `DELETE_EXPIRED_AGENT_RUN_ACTIVITY` runs every batch regardless of whether the entries LIST found
- * anything, and its own two counts -- not the LIST page -- decide whether to keep batching
- * (fix-round-1, finding 2). A run whose recorder never wrote an entry can still carry an orphaned,
- * closed-and-expired `agent_run_activity_state` row with nothing in `agent_run_activity` beside it
- * to put it on the entries LIST; gating the delete on that LIST finding candidates meant this sweep
- * shipped a command that could prune such an orphan but a daemon that would never actually call it
- * whenever no other entries happened to be expired at the same time -- the same unbounded-in-runs
- * leak this task exists to close, just moved one table over.
+ * `DELETE_EXPIRED_AGENT_RUN_ACTIVITY` runs every batch unconditionally -- there is no LIST page left
+ * to gate it on -- and its own two counts decide whether to keep batching (fix-round-1, finding 2).
+ * A run whose recorder never wrote an entry can still carry an orphaned, closed-and-expired
+ * `agent_run_activity_state` row with nothing in `agent_run_activity` beside it; calling the delete
+ * unconditionally every batch is what prunes that orphan even when no other entries are expired at
+ * the same time -- the same unbounded-in-runs leak this task exists to close, just moved one table
+ * over.
  */
 export const cleanupExpiredAgentRunActivity = (input: {
   state: LocalState;
@@ -52,20 +58,9 @@ export const cleanupExpiredAgentRunActivity = (input: {
   logger: FastifyBaseLogger;
 }): AgentRunActivityRetentionSummary => {
   const closedBefore = new Date(input.now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1_000).toISOString();
-  const summary: AgentRunActivityRetentionSummary = { selected: 0, entriesDeleted: 0, stateRowsDeleted: 0 };
+  const summary: AgentRunActivityRetentionSummary = { entriesDeleted: 0, stateRowsDeleted: 0 };
 
   for (let batch = 0; batch < MAX_RETENTION_BATCHES_PER_STARTUP; batch += 1) {
-    const candidates = input.state.query({
-      type: "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES",
-      closedBefore,
-      limit: RETENTION_BATCH_SIZE,
-    });
-    if (candidates.type !== "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES") {
-      throw new Error(
-        `Unexpected result type ${candidates.type} for LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES`,
-      );
-    }
-    summary.selected += candidates.entryIds.length;
     // A fresh, random commandId every call -- deliberately not derived from `closedBefore`/`limit`
     // (which repeat across batches whose page has already fully drained, and would repeat across
     // startups sharing the same rounded `now`). Unlike RECORD_QA_ATTACHMENT_RETENTION, this command
@@ -100,11 +95,7 @@ export const cleanupExpiredAgentRunActivity = (input: {
 
   if (summary.entriesDeleted > 0 || summary.stateRowsDeleted > 0) {
     input.logger.info(
-      {
-        selected: summary.selected,
-        entriesDeleted: summary.entriesDeleted,
-        stateRowsDeleted: summary.stateRowsDeleted,
-      },
+      { entriesDeleted: summary.entriesDeleted, stateRowsDeleted: summary.stateRowsDeleted },
       "Agent run activity retention cleanup completed",
     );
   }

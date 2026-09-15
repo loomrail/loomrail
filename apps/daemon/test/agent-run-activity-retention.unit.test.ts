@@ -1,4 +1,4 @@
-import type { LocalState, StateQuery, StateQueryResult } from "@loomrail/persistence-sqlite";
+import type { LocalState, StateQueryResult } from "@loomrail/persistence-sqlite";
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 
@@ -11,28 +11,32 @@ import { cleanupExpiredAgentRunActivity } from "../src/agent-run-activity-retent
 // covers against a real database. `execute`'s `command` parameter is deliberately left untyped here,
 // exactly like those two precedents -- it is inferred from the `LocalState` type these object
 // literals are assigned to, rather than imported and annotated by hand (StateCommand is not part of
-// @loomrail/persistence-sqlite's public surface; only LocalState, StateQuery and StateQueryResult
-// are).
+// @loomrail/persistence-sqlite's public surface; only LocalState and StateQueryResult are).
+//
+// Every fake's `query` throws unconditionally (fix-round-3): cleanupExpiredAgentRunActivity no
+// longer calls it at all -- the LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES round trip it used to make
+// was dropped as vestigial, since its predicate duplicates the delete's own -- so a throwing stub
+// both satisfies LocalState's required `query` field and stands as a regression guard: if this
+// suite ever starts failing with "must not query", the vestigial call came back.
+const queryMustNotBeCalled = (): StateQueryResult => {
+  throw new Error("cleanupExpiredAgentRunActivity must not call state.query");
+};
 
 const now = new Date("2026-09-05T12:00:00.000Z");
 
 describe("daemon agent run activity retention", () => {
-  it("derives closedBefore as exactly 30 days before `now` and stops once a page comes back short", async () => {
-    let seenClosedBefore = "";
+  it("derives closedBefore as exactly 30 days before `now` and stops once a batch comes back short of a full page", async () => {
+    let observedClosedBefore = "";
+    let executeCalls = 0;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (query: StateQuery): StateQueryResult => {
-        if (query.type !== "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES") {
-          throw new Error(`Unexpected query ${query.type}`);
-        }
-        seenClosedBefore = query.closedBefore;
-        return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: ["activity-1", "activity-2"] };
-      },
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
         }
-        expect(command.payload.closedBefore).toBe(seenClosedBefore);
+        executeCalls += 1;
+        observedClosedBefore = command.payload.closedBefore;
         expect(command.actor).toEqual({ type: "SYSTEM", id: "local-daemon" });
         return {
           schemaVersion: 1,
@@ -47,31 +51,27 @@ describe("daemon agent run activity retention", () => {
     const app = Fastify({ logger: false });
 
     expect(cleanupExpiredAgentRunActivity({ state, now, logger: app.log })).toEqual({
-      selected: 2,
       entriesDeleted: 2,
       stateRowsDeleted: 1,
     });
-    expect(seenClosedBefore).toBe("2026-08-06T12:00:00.000Z");
+    expect(observedClosedBefore).toBe("2026-08-06T12:00:00.000Z");
+    // Both sides came back short of a full page (2 of a possible 1,000 entries, 1 of a possible
+    // 1,000 state rows), so this stops after the one call rather than re-scanning for more.
+    expect(executeCalls).toBe(1);
     await app.close();
   });
 
   // fix-round-1, finding 2: DELETE_EXPIRED_AGENT_RUN_ACTIVITY also prunes an `agent_run_activity_state`
   // row for a closed, expired run that never recorded any entries (MARK_AGENT_RUN_ACTIVITY_DEGRADED
-  // can create one with zero entries) -- exactly the run this LIST query never surfaces, since it
-  // only ever lists `agent_run_activity` rows. Gating the delete on a nonempty LIST page meant a
-  // shipped daemon would never actually call it whenever no other entries happened to be expired at
-  // the same time, leaving that orphan forever. This proves the delete still runs, and still reports
-  // the state row it found, on an entries page that came back empty.
-  it("still issues a delete when the entries page is empty, so an orphaned state row is not skipped", async () => {
+  // can create one with zero entries) -- a run the old entries LIST never surfaced, since it only
+  // ever listed `agent_run_activity` rows. Calling the delete unconditionally every batch (fix-round-3
+  // dropped the LIST entirely, so there is no page left to gate on) is what prunes that orphan even
+  // when no other entries happen to be expired at the same time.
+  it("prunes an orphaned state row even when no agent_run_activity entries are expired", async () => {
     let executeCalls = 0;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (query: StateQuery): StateQueryResult => {
-        if (query.type !== "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES") {
-          throw new Error(`Unexpected query ${query.type}`);
-        }
-        return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] };
-      },
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
@@ -90,7 +90,6 @@ describe("daemon agent run activity retention", () => {
     const app = Fastify({ logger: false });
 
     expect(cleanupExpiredAgentRunActivity({ state, now, logger: app.log })).toEqual({
-      selected: 0,
       entriesDeleted: 0,
       stateRowsDeleted: 1,
     });
@@ -107,12 +106,7 @@ describe("daemon agent run activity retention", () => {
     let executeCalls = 0;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (query: StateQuery): StateQueryResult => {
-        if (query.type !== "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES") {
-          throw new Error(`Unexpected query ${query.type}`);
-        }
-        return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] };
-      },
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
@@ -131,7 +125,6 @@ describe("daemon agent run activity retention", () => {
     const app = Fastify({ logger: false });
 
     expect(cleanupExpiredAgentRunActivity({ state, now, logger: app.log })).toEqual({
-      selected: 0,
       entriesDeleted: 0,
       stateRowsDeleted: 0,
     });
@@ -140,36 +133,28 @@ describe("daemon agent run activity retention", () => {
   });
 
   // Proves the batch cap actually bounds the work: a backlog far larger than any single batch --
-  // every page comes back full, so on its own the loop would run forever -- but the startup cap
+  // every batch comes back full, so on its own the loop would run forever -- but the startup cap
   // stops it at a fixed, small number of calls instead of stalling startup indefinitely.
-  it("stops after the startup batch cap even when every page comes back full", async () => {
+  it("stops after the startup batch cap even when every batch comes back full", async () => {
     let calls = 0;
     let observedLimit = 0;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (query: StateQuery): StateQueryResult => {
-        if (query.type !== "LIST_EXPIRED_AGENT_RUN_ACTIVITY_ENTRIES") {
-          throw new Error(`Unexpected query ${query.type}`);
-        }
-        // Every page is exactly `limit` long, so entryIds.length < limit never fires: only the
-        // startup cap can end this loop.
-        observedLimit = query.limit ?? 0;
-        return {
-          type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES",
-          entryIds: Array.from({ length: observedLimit }, (_, index) => `activity-${index.toString()}`),
-        };
-      },
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
         }
         calls += 1;
+        observedLimit = command.payload.limit;
+        // A full page on both sides, so entriesDeleted/stateRowsDeleted < limit never fires: only
+        // the startup cap can end this loop.
         return {
           schemaVersion: 1,
           type: "AGENT_RUN_ACTIVITY_RETENTION_APPLIED",
           replayed: false,
           entriesDeleted: command.payload.limit,
-          stateRowsDeleted: 0,
+          stateRowsDeleted: command.payload.limit,
         };
       },
       close: () => undefined,
@@ -184,7 +169,7 @@ describe("daemon agent run activity retention", () => {
     expect(calls).toBe(20);
     expect(observedLimit).toBeGreaterThan(0);
     expect(summary.entriesDeleted).toBe(calls * observedLimit);
-    expect(summary.selected).toBe(summary.entriesDeleted);
+    expect(summary.stateRowsDeleted).toBe(calls * observedLimit);
     await app.close();
   });
 
@@ -192,7 +177,7 @@ describe("daemon agent run activity retention", () => {
     const infoMessages: unknown[] = [];
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (): StateQueryResult => ({ type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] }),
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
@@ -221,14 +206,9 @@ describe("daemon agent run activity retention", () => {
 
   it("logs a completion summary with the observed counts once something was deleted", async () => {
     const infoMessages: unknown[] = [];
-    let served = false;
     const state: LocalState = {
       startup: { appliedMigrations: [] },
-      query: (): StateQueryResult => {
-        if (served) return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: [] };
-        served = true;
-        return { type: "AGENT_RUN_ACTIVITY_RETENTION_CANDIDATES", entryIds: ["activity-1"] };
-      },
+      query: queryMustNotBeCalled,
       execute: (command) => {
         if (command.type !== "DELETE_EXPIRED_AGENT_RUN_ACTIVITY") {
           throw new Error(`Unexpected command ${command.type}`);
@@ -251,13 +231,12 @@ describe("daemon agent run activity retention", () => {
     };
 
     expect(cleanupExpiredAgentRunActivity({ state, now, logger: app.log })).toEqual({
-      selected: 1,
       entriesDeleted: 1,
       stateRowsDeleted: 1,
     });
     expect(infoMessages).toHaveLength(1);
     expect(infoMessages[0]).toMatchObject([
-      { selected: 1, entriesDeleted: 1, stateRowsDeleted: 1 },
+      { entriesDeleted: 1, stateRowsDeleted: 1 },
       "Agent run activity retention cleanup completed",
     ]);
     await app.close();

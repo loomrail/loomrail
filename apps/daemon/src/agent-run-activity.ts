@@ -203,6 +203,31 @@ const mapAuditedEntries = (
   return calls.map((call, index) => activityEntryFromWorkspaceToolCall(call, provider, index + 1));
 };
 
+export type ResolvedAuditedCalls = {
+  readonly auditedCalls: readonly WorkspaceToolCallRecord[];
+  readonly degraded: boolean;
+};
+
+/**
+ * Guards `mapAuditedEntries`'s own defence-in-depth invariant (audited calls need a live provider,
+ * or it throws) at the read boundary, before that throw can turn an ordinary GET into a 500.
+ *
+ * The invariant itself stays enforced inside the page builder -- RECORD_AGENT_RUN_ACTIVITY and the
+ * workspace-tool gateway both still require a live provider, so production cannot produce this
+ * combination going forward, and a caller that got `provider` wrong should still fail loudly. But
+ * MOCK is a real, historical AgentRun provider (tests, fixtures, and any row written before that
+ * invariant existed), and a read that 500s over a data shape the caller has no way to fix is the
+ * wrong failure mode for what is, at worst, stale diagnostic data. The read path calls this first:
+ * drop the orphaned calls and flag the page `degraded` instead of failing the whole request.
+ */
+export const resolveAuditedCallsForRead = (
+  auditedCalls: readonly WorkspaceToolCallRecord[],
+  provider: LiveProviderId | null,
+): ResolvedAuditedCalls =>
+  provider === null && auditedCalls.length > 0
+    ? { auditedCalls: [], degraded: true }
+    : { auditedCalls, degraded: false };
+
 /**
  * Merges both sources and slices out one page, entirely in memory.
  *

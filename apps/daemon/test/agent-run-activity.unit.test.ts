@@ -8,6 +8,7 @@ import {
   decodeCursor,
   encodeCursor,
   mergeRunActivity,
+  resolveAuditedCallsForRead,
   MAX_ACTIVITY_PAGE_SIZE,
 } from "../src/agent-run-activity.js";
 
@@ -307,5 +308,37 @@ describe("buildAgentRunActivityPage", () => {
         cursor: null,
       }),
     ).toThrow(/no live provider/);
+  });
+});
+
+describe("resolveAuditedCallsForRead", () => {
+  it("passes audited calls through unchanged for a live provider", () => {
+    const calls = [workspaceToolCall({ id: "w1" })];
+    expect(resolveAuditedCallsForRead(calls, "CODEX")).toEqual({ auditedCalls: calls, degraded: false });
+  });
+
+  it("passes an empty list through for a MOCK (null) provider -- the ordinary case", () => {
+    expect(resolveAuditedCallsForRead([], null)).toEqual({ auditedCalls: [], degraded: false });
+  });
+
+  // The read-boundary fix this guards: a MOCK AgentRun that somehow does have audited rows (fixture
+  // data, or a row written before the provider/audited-calls invariant existed) must not reach
+  // `buildAgentRunActivityPage` -- which throws on exactly this combination -- and turn an ordinary
+  // GET into a 500. Dropping the orphaned calls and flagging `degraded` keeps the read alive.
+  it("drops orphaned audited calls for a null provider and flags the page degraded", () => {
+    const calls = [workspaceToolCall({ id: "w1" })];
+    expect(resolveAuditedCallsForRead(calls, null)).toEqual({ auditedCalls: [], degraded: true });
+    // And the drop actually neutralises the throw `buildAgentRunActivityPage` would otherwise raise.
+    const resolved = resolveAuditedCallsForRead(calls, null);
+    expect(() =>
+      buildAgentRunActivityPage({
+        auditedCalls: resolved.auditedCalls,
+        provider: null,
+        reportedRows: [],
+        omittedCount: 0,
+        degraded: resolved.degraded,
+        cursor: null,
+      }),
+    ).not.toThrow();
   });
 });

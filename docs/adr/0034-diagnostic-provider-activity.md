@@ -114,9 +114,9 @@ cursor naming a position that has since been pruned restarts the page from the o
 `gap: true` so the owner is told about the hole. `seq` is monotonic within one source and not dense, and it is
 not the cursor.
 
-The audited action is now shown in exactly one place. `WORKSPACE_TOOL_CALL_CHANGED` no longer renders in the
-WorkItem Activity timeline, which stays the work item's lifecycle history; Run Activity is that action's sole
-home.
+The audited action leaves the WorkItem Activity timeline for good: `WORKSPACE_TOOL_CALL_CHANGED` no longer
+renders there, which stays the work item's lifecycle history, and that exclusion does not depend on pipeline
+progress. Run Activity picks the same action up next -- but not for as long; see Consequences for the bound.
 
 ### Storage is deliberately mutable and prunable
 
@@ -190,8 +190,16 @@ nothing interprets it as Markdown, HTML or a link.
 
 ## Consequences
 
-- The owner can see what an agent is doing while it runs and what it did in a finished run, without a raw log
-  and without the feed being able to claim anything.
+- The owner can see what an agent is doing while it runs, and what it did in a finished run, without a raw log
+  and without the feed being able to claim anything -- but only for the WorkItem's _current_ stage attempt.
+  Run Activity reads `run.currentStageAttemptId`'s latest AgentRun (`RunActivitySection.tsx`), not the
+  WorkItem's whole run history: once the pipeline advances past the stage attempt that made an audited call,
+  that call's `WORKSPACE_TOOL_CALL_CHANGED` row stops being visible in Run Activity too -- and it already left
+  the WorkItem Activity timeline for good (see above), so at that point it is visible on no screen. The row
+  itself is not lost -- it stays in the append-only `workspace_tool_calls` table -- and the file change it
+  produced stays visible in the Changes section regardless of pipeline progress; only the audited-action view
+  of it narrows. Widening Run Activity to the WorkItem's whole run history, not just the current attempt, is
+  separate follow-up work, outside this ADR's scope.
 - The two authorities stay legible. An audited action and a provider claim are stored apart, labelled apart and
   described apart in the UI, so the feed cannot quietly launder a provider's account into evidence.
 - Untrusted provider text now reaches the owner's UI on a new surface. It is bounded, redacted, stripped of

@@ -1879,10 +1879,19 @@ test.describe("authenticated walking skeleton", () => {
     // the now-removed WorkItem-lifecycle Activity timeline (workItemTimeline.ts's
     // `isWorkItemTimelineEvent` excludes WORKSPACE_TOOL_CALL_CHANGED from it entirely; Run Activity
     // is its only home now).
-    await expect(
-      runActivity.locator(".run-activity__entries").getByText("Write file", { exact: true }),
-    ).toBeVisible({ timeout: BUDGET_WALL_MS });
-    releaseImplementationWrite();
+    //
+    // `releaseImplementationWrite` runs in a `finally`: the provider double's `start` is parked on
+    // the promise it resolves (workspaceExercisingProvider, above), so if this assertion times out
+    // instead of resolving, an un-released gate would leave that fake session hanging forever --
+    // `daemon?.close()` in `afterEach` waiting on a session that can never finish, turning one
+    // flaky/failing assertion into a hung test run instead of a clean failure.
+    try {
+      await expect(
+        runActivity.locator(".run-activity__entries").getByText("Write file", { exact: true }),
+      ).toBeVisible({ timeout: BUDGET_WALL_MS });
+    } finally {
+      releaseImplementationWrite();
+    }
 
     await expect(workflowSection.getByRole("heading", { name: "Acceptance package" })).toBeVisible({
       timeout: BUDGET_WALL_MS,

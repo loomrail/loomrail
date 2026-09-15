@@ -2541,9 +2541,10 @@ Required verification, all present:
   still has its orphaned counters row swept; running the delete twice over the same window is a no-op the second
   time; a non-daemon actor is rejected and deletes nothing.
 - `apps/daemon/test/agent-run-activity-retention.unit.test.ts` — the startup orchestration, against a fake
-  LocalState: `closedBefore` is exactly 30 days before the injected `now`; an empty first page skips `execute`
-  entirely; a backlog that never returns a short page is still cut off at the batch cap; the completion log line
-  is emitted only when something was actually deleted.
+  LocalState: `closedBefore` is exactly 30 days before the injected `now`; the delete runs on every batch
+  regardless of what it finds, so an orphaned `agent_run_activity_state` row is pruned even when no
+  `agent_run_activity` entries are expired; a backlog that never returns a short batch is still cut off at the
+  batch cap; the completion log line is emitted only when something was actually deleted.
 
 Residual risk: the feed is untrusted text the owner reads, and a provider can fill it with plausible but false
 claims about its own work; it is labelled as such and proves nothing. It is also incomplete by construction —

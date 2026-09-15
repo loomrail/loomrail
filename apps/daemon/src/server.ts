@@ -212,6 +212,7 @@ import { z, ZodError } from "zod";
 import {
   buildAgentRunActivityPage,
   decodeCursor,
+  resolveAuditedCallsForRead,
   REPORTED_ENTRIES_FETCH_LIMIT,
   type ActivityCursor,
 } from "./agent-run-activity.js";
@@ -3462,14 +3463,21 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
         // has exactly one provider for its whole lifetime, so that is the source of truth. `null` for
         // MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures, just not one the
         // activity feed was ever built to carry (`buildAgentRunActivityPage` treats it as "no audited
-        // entries possible", not as a request to fail).
+        // entries possible", not as a request to fail -- as long as there are none to map; see the
+        // resolve step below for when there are).
         const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
+        const resolvedProvider = runProvider.success ? runProvider.data : null;
+        // A MOCK AgentRun that somehow does have audited rows (historical data predating the
+        // provider/audited-calls invariant, or a fixture) would otherwise reach
+        // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first so
+        // the read degrades instead of failing outright.
+        const resolvedAudited = resolveAuditedCallsForRead(auditedResult.calls, resolvedProvider);
         const page = buildAgentRunActivityPage({
-          auditedCalls: auditedResult.calls,
-          provider: runProvider.success ? runProvider.data : null,
+          auditedCalls: resolvedAudited.auditedCalls,
+          provider: resolvedProvider,
           reportedRows: reportedResult.entries,
           omittedCount: reportedResult.omittedCount,
-          degraded: reportedResult.degraded,
+          degraded: reportedResult.degraded || resolvedAudited.degraded,
           cursor,
         });
         return reply
