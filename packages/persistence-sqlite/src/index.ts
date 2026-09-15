@@ -11,6 +11,7 @@ import {
   agentRunPolicySnapshotSchema,
   agentRunSchema,
   agentRunStatusSchema,
+  maxAgentFleetEntries,
   maxAttentionProjectionSources,
   budgetPolicySchema,
   checkpointSchema,
@@ -344,6 +345,7 @@ import { applyMigrations, databaseWasNonEmpty } from "./migrations.js";
 import {
   StateStoreError,
   type AgentRunActivityRow,
+  type LatestAgentRunActivityEntry,
   type LocalState,
   type OpenLocalStateOptions,
   type OrphanProcessEvent,
@@ -488,6 +490,34 @@ const agentRunActivityRowFromRow = (value: unknown): AgentRunActivityRow => {
     detail: row.detail,
     status: row.status,
     truncated: row.truncated === 1,
+  };
+};
+
+// Task 10's newest-across-both-sources read. `origin_rank` is the raw `0`/`1` the query's own
+// `ORDER BY ... origin_rank DESC` used to break same-timestamp ties -- see the SQL's comment on
+// `selectLatestAgentRunActivity` for why `0` (DAEMON_AUDITED) must sort behind `1`
+// (PROVIDER_REPORTED), matching Task 8's `ORIGIN_ORDER`. Translated to the named `origin` value
+// here, at the read boundary, rather than carried as a bare number past this function.
+const latestAgentRunActivityRowSchema = z.object({
+  agent_run_id: z.string(),
+  id: z.string(),
+  at: z.string(),
+  origin_rank: z.union([z.literal(0), z.literal(1)]),
+  label: z.string().nullable(),
+  detail: z.string().nullable(),
+  status: z.string().nullable(),
+});
+
+const latestAgentRunActivityFromRow = (value: unknown): LatestAgentRunActivityEntry => {
+  const row = latestAgentRunActivityRowSchema.parse(value);
+  return {
+    agentRunId: row.agent_run_id,
+    id: row.id,
+    at: row.at,
+    origin: row.origin_rank === 0 ? "DAEMON_AUDITED" : "PROVIDER_REPORTED",
+    label: row.label,
+    detail: row.detail,
+    status: row.status,
   };
 };
 
@@ -1552,6 +1582,14 @@ const stateQuerySchema = z.discriminatedUnion("type", [
       // 2_000, not the table's own 1_000-row bound: a caller reading the buffer at its cap must
       // still be able to ask for "everything held" without the query schema refusing the number.
       limit: z.number().int().min(1).max(2_000).default(200),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("LIST_LATEST_AGENT_RUN_ACTIVITY"),
+      // Bounded at the Fleet's own cap, its only caller today: no read of this ever needs more
+      // AgentRun ids than the Fleet can show at once.
+      agentRunIds: z.array(opaqueIdSchema).max(maxAgentFleetEntries),
     })
     .strict(),
   z.object({ type: z.literal("GET_QA_RUN"), qaRunId: opaqueIdSchema }).strict(),
@@ -4200,6 +4238,55 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     );
     const selectAgentRunActivityState = database.prepare(
       "SELECT next_seq, omitted_count, degraded FROM agent_run_activity_state WHERE agent_run_id = ?",
+    );
+    // Task 10: the newest Run Activity entry per AgentRun, across BOTH `workspace_tool_calls` and
+    // `agent_run_activity`, for however many AgentRuns the Fleet is currently rendering -- one
+    // statement, bound once at startup like every other query in this file, not re-prepared per
+    // call with a hand-built `IN (?,?,?)` list whose placeholder count would have to match the
+    // caller's array length. `json_each(?)` takes that variable-length list as a single JSON-array
+    // parameter instead.
+    //
+    // `origin_rank` -- `0` for an audited row, `1` for a reported one -- exists only to give the
+    // window function's `ORDER BY` a tie-break identical to Task 8's `mergeRunActivity`
+    // (`ORIGIN_ORDER: { DAEMON_AUDITED: 0, PROVIDER_REPORTED: 1 }`, ascending): two entries sharing
+    // an exact timestamp must resolve to the same "which is newer" answer here as they would at the
+    // tail of a full merged page, or this read and the feed it summarizes could disagree. Ranking
+    // `ROW_NUMBER() OVER (PARTITION BY agent_run_id ORDER BY at DESC, origin_rank DESC, id DESC)`
+    // and keeping `rn = 1` picks, per run, the row that would sort LAST in that feed's ascending
+    // order -- its newest entry -- which is why every key in the window is DESC here where the
+    // feed's own ordering is ASC.
+    const selectLatestAgentRunActivity = database.prepare(
+      `WITH target_runs AS (
+         SELECT value AS agent_run_id FROM json_each(?)
+       ),
+       audited AS (
+         SELECT
+           agent_run_id, id, started_at AS at, 0 AS origin_rank,
+           operation AS label, target AS detail, status
+         FROM workspace_tool_calls
+         WHERE agent_run_id IN (SELECT agent_run_id FROM target_runs)
+       ),
+       reported AS (
+         SELECT
+           agent_run_id, id, observed_at AS at, 1 AS origin_rank,
+           label, detail, status
+         FROM agent_run_activity
+         WHERE agent_run_id IN (SELECT agent_run_id FROM target_runs)
+       ),
+       combined AS (
+         SELECT * FROM audited
+         UNION ALL
+         SELECT * FROM reported
+       ),
+       ranked AS (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY agent_run_id ORDER BY at DESC, origin_rank DESC, id DESC
+         ) AS rn
+         FROM combined
+       )
+       SELECT agent_run_id, id, at, origin_rank, label, detail, status
+       FROM ranked
+       WHERE rn = 1`,
     );
     const selectLatestSucceededDeveloperAgentRun = database.prepare(
       `SELECT * FROM agent_runs
@@ -14620,6 +14707,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             degraded: state === null ? false : state.degraded === 1,
           };
         }
+        case "LIST_LATEST_AGENT_RUN_ACTIVITY":
+          return {
+            type: "LATEST_AGENT_RUN_ACTIVITY",
+            entries:
+              queryValue.agentRunIds.length === 0
+                ? []
+                : selectLatestAgentRunActivity
+                    .all(JSON.stringify(queryValue.agentRunIds))
+                    .map(latestAgentRunActivityFromRow),
+          };
         case "LIST_REVIEW_REPORTS":
           return {
             type: "REVIEW_REPORTS",

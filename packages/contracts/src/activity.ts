@@ -50,6 +50,11 @@ export type ProviderActivityEntry = z.infer<typeof providerActivityEntrySchema>;
  * a provider.
  */
 export const activityOriginSchema = z.enum(["DAEMON_AUDITED", "PROVIDER_REPORTED"]);
+// Named and exported on its own, not left as an inline literal union, because Task 10 needs it in
+// packages/persistence-sqlite: a second package that computes this same value from which table a
+// row came from (the Fleet's "latest action" read, newest-first across both sources) and must not
+// hand-roll its own copy of the two-value vocabulary this schema already owns.
+export type ActivityOrigin = z.infer<typeof activityOriginSchema>;
 
 export const agentRunActivityEntrySchema = z
   .object({

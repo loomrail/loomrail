@@ -1,5 +1,6 @@
 import type { ContextSources } from "@loomrail/context-assembly";
 import type {
+  ActivityOrigin,
   AttentionInboxResponse,
   AgentRun,
   AgentRunStatus,
@@ -172,6 +173,32 @@ export type AgentRunActivityRow = {
   truncated: boolean;
 };
 
+/**
+ * The newest Run Activity entry for one AgentRun, resolved across BOTH sources -- daemon-audited
+ * `workspace_tool_calls` and provider-reported `agent_run_activity` -- by the same rule the merged
+ * feed itself orders by (Task 8's `mergeRunActivity`: time first, then origin, then id), so this and
+ * a full page of the feed can never disagree about which entry is newest.
+ *
+ * A "newest-first sibling" of `AgentRunActivityRow` above and `WorkspaceToolCallRecord`'s own
+ * agent-run read: those two hand back one run's full history, oldest first, for a reader paging a
+ * run's story; this hands back many runs' single newest entry in one query, for a reader (the Agent
+ * Fleet table, and the Task Cockpit's collapsed Run Activity summary after it) who only ever wants
+ * to know "what is this AgentRun doing right now" and would otherwise have to page an entire run --
+ * or issue one query per run -- just to find out.
+ *
+ * `origin` is computed here, from which of the two source tables the winning row came from, exactly
+ * like every other read in this package: never stored, never accepted from a caller.
+ */
+export type LatestAgentRunActivityEntry = {
+  agentRunId: string;
+  id: string;
+  at: string;
+  origin: ActivityOrigin;
+  label: string | null;
+  detail: string | null;
+  status: string | null;
+};
+
 export type StateQuery =
   | { type: "LIST_PROJECTS" }
   | { type: "GET_REPORTING_FACTS" }
@@ -246,6 +273,15 @@ export type StateQuery =
       type: "LIST_AGENT_RUN_ACTIVITY";
       agentRunId: string;
       limit?: number;
+    }
+  | {
+      // Task 10's shared "what is it doing right now" read: the newest entry across BOTH Run
+      // Activity sources, for each of the given AgentRuns, in one query -- a newest-first sibling
+      // of LIST_AGENT_RUN_ACTIVITY and LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN above, which both
+      // read one run's full ascending history. A run with no entries in either source is simply
+      // absent from the result, not present with a null -- see LatestAgentRunActivityEntry.
+      type: "LIST_LATEST_AGENT_RUN_ACTIVITY";
+      agentRunIds: readonly string[];
     }
   | { type: "GET_QA_RUN"; qaRunId: string }
   | { type: "GET_QA_STATE"; pipelineRunId: string }
@@ -402,6 +438,7 @@ export type StateQueryResult =
       omittedCount: number;
       degraded: boolean;
     }
+  | { type: "LATEST_AGENT_RUN_ACTIVITY"; entries: LatestAgentRunActivityEntry[] }
   | { type: "QA_RUN"; qaRun: QARun | null }
   | {
       type: "QA_STATE";

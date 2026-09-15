@@ -2732,6 +2732,31 @@ body.is-resizing {
   margin-top: 3px;
 }
 
+/* Task 10: the "what is it doing right now" column. Overflow follows the same rule as
+   .agent-fleet__task's own strong/span above -- ellipsis inside a min-width:0 block, never a
+   wrapped or widened cell -- so a long provider-reported label cannot break the table's layout. */
+.agent-fleet__latest-action {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-fleet__latest-action-label {
+  color: var(--lr-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The origin badge is a second, always-visible text label -- "Verified" / "Provider-reported" --
+   not a colour alone: colour is never the sole carrier of meaning in this table (see the Status
+   column's own dot-plus-text pattern above), and DAEMON_AUDITED vs PROVIDER_REPORTED is exactly
+   the kind of distinction a colour-blind or greyscale reading must not lose. */
+.agent-fleet__latest-action-origin {
+  color: var(--lr-text-faint);
+  font-size: var(--lr-font-xs);
+}
+
 .agent-fleet__empty {
   display: grid;
   min-height: 300px;

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ProviderActivityEntry, WorkflowTemplate } from "@loomrail/contracts";
+import type { ProviderActivityEntry, WorkflowTemplate, WorkspaceToolOperation } from "@loomrail/contracts";
 
 import { openLocalState, StateStoreError, type LocalState } from "../src/index.js";
 
@@ -651,5 +651,266 @@ describe("mark agent run activity degraded", () => {
     expect(page.degraded).toBe(true);
     expect(page.entries).toHaveLength(0);
     expect(page.omittedCount).toBe(0);
+  });
+});
+
+// Task 10's shared read: the newest Run Activity entry per AgentRun, resolved across BOTH sources
+// in one query. What makes this worth its own suite rather than a few more cases in the block
+// above is exactly the case a naive implementation gets wrong -- picking the newer of two rows that
+// live in different tables, in either order -- which the block above never exercises because it
+// only ever touches `agent_run_activity`.
+describe("latest agent run activity", () => {
+  let temporaryDirectory = "";
+  let databasePath = "";
+  let state: LocalState | undefined;
+  let nextId = 0;
+  let clockOffsetMs = 0;
+
+  beforeEach(async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "loomrail latest agent run activity тест "));
+    databasePath = join(temporaryDirectory, "state.sqlite");
+    clockOffsetMs = 0;
+  });
+
+  afterEach(async () => {
+    state?.close();
+    state = undefined;
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  });
+
+  // Ticks forward on every command, same reasoning as the describe block above: this suite's whole
+  // point is proving which of two sources is NEWER, so the two sources' timestamps must actually
+  // differ and increase in the exact order the commands below run in.
+  const tick = (): Date => {
+    clockOffsetMs += 1;
+    return new Date(new Date(timestamp).getTime() + clockOffsetMs);
+  };
+
+  const open = async (): Promise<LocalState> => {
+    state = await openLocalState({
+      databasePath,
+      now: tick,
+      createId: (kind) => `${kind}-${(nextId += 1).toString()}`,
+    });
+    return state;
+  };
+
+  // Duplicated from the describe blocks above rather than shared, same reasoning as the second
+  // block's own copy: this suite's fixtures should read on their own. `projectSuffix` keeps two
+  // fixtures opened against the same LocalState (the "many runs in one query" test needs exactly
+  // that) from colliding on `REGISTER_PROJECT`'s project id.
+  const startExecution = (localState: LocalState, projectSuffix: string): ActivityFixture => {
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `register-project-${projectSuffix}`,
+      correlationId: `correlation-register-project-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "REGISTER_PROJECT",
+      payload: {
+        id: `project-${projectSuffix}`,
+        // Unlike the describe block above, this suite opens two fixtures against the same
+        // LocalState (the "many runs in one query" test needs both at once) -- a shared bundled
+        // fixtureId would collide on REGISTER_PROJECT's own uniqueness check the second time.
+        fixtureId: null,
+        name: "Latest agent run activity fixture",
+        repositoryPath: join(temporaryDirectory, `repo-${projectSuffix}`),
+      },
+    });
+    const created = localState.execute({
+      schemaVersion: 1,
+      commandId: `create-work-item-${projectSuffix}`,
+      correlationId: `correlation-create-work-item-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "CREATE_WORK_ITEM",
+      payload: {
+        projectId: `project-${projectSuffix}`,
+        parentId: null,
+        type: "TASK",
+        title: "Record live agent run activity",
+        description: "Synthetic fixture",
+        priority: "MEDIUM",
+        risk: "LOW",
+        acceptanceCriteria: ["Agent run activity is durable"],
+      },
+    });
+    if (created.type !== "WORK_ITEM_CREATED") throw new Error("Expected WorkItem creation");
+    localState.execute({
+      schemaVersion: 1,
+      commandId: `ready-work-item-${projectSuffix}`,
+      correlationId: `correlation-ready-work-item-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "MOVE_WORK_ITEM",
+      payload: { workItemId: created.workItem.id, expectedVersion: 1, targetState: "READY" },
+    });
+    const pipeline = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-pipeline-${projectSuffix}`,
+      correlationId: `correlation-start-pipeline-${projectSuffix}`,
+      actor: { type: "HUMAN", id: "local-owner" },
+      type: "START_MOCK_PIPELINE",
+      payload: {
+        workItemId: created.workItem.id,
+        expectedVersion: 2,
+        template: activityTemplate,
+        budget: { maxEstimatedTokens: 200_000, warningThresholds: [0.5, 0.8, 0.95] },
+      },
+    });
+    if (pipeline.type !== "PIPELINE_STARTED") throw new Error("Expected pipeline start");
+    const agent = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-agent-run-${projectSuffix}`,
+      correlationId: `correlation-start-agent-run-${projectSuffix}`,
+      actor: { type: "SYSTEM", id: "local-daemon" },
+      type: "START_AGENT_RUN",
+      payload: {
+        dispatchId: pipeline.dispatch.id,
+        provider: "CODEX",
+        limits: { global: 3, project: 3, provider: 3 },
+      },
+    });
+    if (agent.type !== "AGENT_RUN_STARTED") throw new Error("Expected AgentRun start");
+    const session = localState.execute({
+      schemaVersion: 1,
+      commandId: `start-provider-session-${projectSuffix}`,
+      correlationId: `correlation-start-provider-session-${projectSuffix}`,
+      actor: { type: "SYSTEM", id: "session-loop" },
+      type: "START_PROVIDER_SESSION",
+      payload: {
+        stageAttemptId: pipeline.stageAttempt.id,
+        recipe: {
+          schemaVersion: 1,
+          templateId: activityTemplate.id,
+          templateVersion: activityTemplate.version,
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: agent.run.profile.id, revision: agent.run.profile.revision },
+          sections: [{ id: "WORK_ITEM_BRIEF", sources: [], bytes: 10 }],
+          omitted: [],
+          contentHash: `sha256:${"a".repeat(64)}`,
+          estimatedTokens: 10,
+          budgetTokens: 100,
+          estimateQuality: "LOOMRAIL_ESTIMATE",
+        },
+      },
+    });
+    if (session.type !== "PROVIDER_SESSION_STARTED") throw new Error("Expected ProviderSession start");
+    return {
+      agentRunId: agent.run.id,
+      providerSessionId: session.session.id,
+      provider: "CODEX",
+    };
+  };
+
+  const recordActivity = (fixture: ActivityFixture, actionKey: string, label: string) => ({
+    schemaVersion: 1 as const,
+    commandId: `activity-${fixture.providerSessionId}-${actionKey}`,
+    correlationId: "correlation-agent-run-activity",
+    actor: { type: "SYSTEM" as const, id: "session-loop" },
+    type: "RECORD_AGENT_RUN_ACTIVITY" as const,
+    payload: {
+      agentRunId: fixture.agentRunId,
+      providerSessionId: fixture.providerSessionId,
+      provider: fixture.provider,
+      entry: {
+        actionKey,
+        kind: "TOOL_CALL" as const,
+        label,
+        detail: null,
+        status: "ok",
+        terminal: true,
+        truncated: false,
+      },
+    },
+  });
+
+  // `START_WORKSPACE_TOOL_CALL` alone is enough: the newest-entry read orders `workspace_tool_calls`
+  // by `started_at`, exactly like Task 8's merged feed does (activityEntryFromWorkspaceToolCall's
+  // `at: call.startedAt`), so there is no need to also finish the call just to give it a timestamp.
+  const startWorkspaceToolCall = (
+    fixture: ActivityFixture,
+    providerCallKey: string,
+    operation: WorkspaceToolOperation,
+    target: string,
+  ) => ({
+    schemaVersion: 1 as const,
+    commandId: `workspace-tool-${fixture.providerSessionId}-${providerCallKey}`,
+    correlationId: "correlation-workspace-tool-call",
+    actor: { type: "SYSTEM" as const, id: "workspace-executor" },
+    type: "START_WORKSPACE_TOOL_CALL" as const,
+    payload: {
+      providerSessionId: fixture.providerSessionId,
+      providerCallKey,
+      operation,
+      target,
+      policyDigest: "b".repeat(64),
+      inputDigest: "c".repeat(64),
+    },
+  });
+
+  const readLatest = (localState: LocalState, agentRunIds: readonly string[]) => {
+    const result = localState.query({ type: "LIST_LATEST_AGENT_RUN_ACTIVITY", agentRunIds });
+    if (result.type !== "LATEST_AGENT_RUN_ACTIVITY") {
+      throw new Error("Expected a latest agent run activity read");
+    }
+    return result.entries;
+  };
+
+  it("returns nothing for an AgentRun with no activity in either source", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState, "p1");
+
+    expect(readLatest(localState, [fixture.agentRunId])).toEqual([]);
+  });
+
+  it("picks the provider-reported entry when it is the newer of the two sources", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState, "p1");
+    // Audited first, so it gets the earlier `started_at`.
+    localState.execute(startWorkspaceToolCall(fixture, "a".repeat(64), "READ_FILE", "src/a.ts"));
+    localState.execute(recordActivity(fixture, "c1", "pnpm test"));
+
+    const entries = readLatest(localState, [fixture.agentRunId]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      agentRunId: fixture.agentRunId,
+      origin: "PROVIDER_REPORTED",
+      label: "pnpm test",
+    });
+  });
+
+  it("picks the audited entry when it is the newer of the two sources", async () => {
+    const localState = await open();
+    const fixture = startExecution(localState, "p1");
+    // Reported first this time -- the naive mistake this suite exists to catch is an implementation
+    // that always prefers one source over the other instead of actually comparing timestamps.
+    localState.execute(recordActivity(fixture, "c1", "pnpm test"));
+    localState.execute(startWorkspaceToolCall(fixture, "a".repeat(64), "READ_FILE", "src/a.ts"));
+
+    const entries = readLatest(localState, [fixture.agentRunId]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      agentRunId: fixture.agentRunId,
+      origin: "DAEMON_AUDITED",
+      label: "READ_FILE",
+      detail: "src/a.ts",
+    });
+  });
+
+  it("reads many AgentRuns' latest entries in one query, each matched to its own run", async () => {
+    const localState = await open();
+    const first = startExecution(localState, "p1");
+    const second = startExecution(localState, "p2");
+    localState.execute(recordActivity(first, "c1", "pnpm test"));
+    localState.execute(startWorkspaceToolCall(second, "a".repeat(64), "WRITE_FILE", "src/b.ts"));
+
+    const entries = readLatest(localState, [first.agentRunId, second.agentRunId]);
+    expect(entries).toHaveLength(2);
+    expect(entries.find((entry) => entry.agentRunId === first.agentRunId)).toMatchObject({
+      origin: "PROVIDER_REPORTED",
+      label: "pnpm test",
+    });
+    expect(entries.find((entry) => entry.agentRunId === second.agentRunId)).toMatchObject({
+      origin: "DAEMON_AUDITED",
+      label: "WRITE_FILE",
+    });
   });
 });
