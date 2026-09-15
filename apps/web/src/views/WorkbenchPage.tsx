@@ -11,7 +11,6 @@ import {
   type AgentRunStatus,
   type Checkpoint,
   type ContextWindowUsage,
-  type DomainEvent,
   type EvidenceArtifact,
   type HumanRequest,
   type ModelTier,
@@ -76,6 +75,7 @@ import {
 } from "@loomrail/ui";
 
 import { ChangesSection } from "./ChangesSection";
+import { isWorkItemTimelineEvent, type WorkItemTimelineEvent } from "./workItemTimeline";
 import { workItemAcceptanceExportUrl, workItemQAAttachmentUrl } from "../api";
 import {
   defaultBoardView,
@@ -89,6 +89,7 @@ import {
 import { PanelResizer } from "../components/PanelResizer";
 import { ProjectProviderAllowanceStrip } from "../components/ProviderAllowanceStrip";
 import { ProjectVerificationPanel } from "../components/ProjectVerificationPanel";
+import { RunActivitySection } from "../components/RunActivitySection";
 import { HumanRequestAnswerForm } from "../components/HumanRequestAnswerForm";
 import { LocalConnectionRecovery } from "../components/LocalConnectionRecovery";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
@@ -633,7 +634,7 @@ const verificationFailureReasonLabelKeys: Record<VerificationFailure["reason"], 
   STALE: "verification.failure.STALE",
 };
 
-const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
+const eventPresentation = (event: WorkItemTimelineEvent, t: Translator): Omit<TimelineEventProps, "time"> => {
   switch (event.type) {
     case "WORK_ITEM_CREATED":
       return {
@@ -1312,36 +1313,6 @@ const eventPresentation = (event: DomainEvent, t: Translator): Omit<TimelineEven
         label: t("event.workspaceOrphaned"),
         tone: "warning",
       };
-    case "WORKSPACE_TOOL_CALL_CHANGED": {
-      const workspaceToolNeedsApproval =
-        event.data.call.status === "DENIED" &&
-        (event.data.call.failureCode === "WORKSPACE_ACCESS_DENIED" ||
-          event.data.call.failureCode === "RECIPE_NOT_APPROVED" ||
-          event.data.call.failureCode === "RECIPE_AUTHORITY_CHANGED" ||
-          event.data.call.failureCode === "NETWORK_POLICY_UNAVAILABLE");
-      return {
-        detail: t("event.workspaceToolCallDetail", {
-          operation: t(`workspaceTool.operation.${event.data.call.operation}`),
-          target: event.data.call.target,
-          status: workspaceToolNeedsApproval
-            ? t("workspaceTool.status.APPROVAL_REQUIRED")
-            : t(`workspaceTool.status.${event.data.call.status}`),
-        }),
-        icon:
-          event.data.call.status === "SUCCEEDED"
-            ? "check"
-            : event.data.call.status === "STARTED"
-              ? "clock"
-              : "warning",
-        label: t("event.workspaceToolCall"),
-        tone:
-          event.data.call.status === "SUCCEEDED"
-            ? "success"
-            : event.data.call.status === "STARTED"
-              ? "accent"
-              : "warning",
-      };
-    }
   }
 };
 
@@ -3424,7 +3395,9 @@ const ActivitySkeleton = ({ label }: { label?: string }): React.JSX.Element => (
 const TaskActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const { locale, t } = useI18n();
   const eventsQuery = useWorkItemEvents(item.projectId, item.id);
-  const events = eventsQuery.data?.pages.flatMap((page) => page.events) ?? [];
+  const events = (eventsQuery.data?.pages.flatMap((page) => page.events) ?? []).filter(
+    isWorkItemTimelineEvent,
+  );
   const loadMore = (): void => {
     void eventsQuery.fetchNextPage();
   };
@@ -3654,6 +3627,8 @@ const TaskInspector = ({ item }: { item: WorkItem | null }): React.JSX.Element =
           <p className="inspector-copy">{t("task.noAcceptanceCriteria")}</p>
         )}
       </InspectorSection>
+
+      <RunActivitySection item={item} />
 
       <TaskActivitySection item={item} />
 

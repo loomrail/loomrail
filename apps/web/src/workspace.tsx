@@ -72,6 +72,7 @@ import {
   getVerificationPlanSettings,
   getAttentionInbox,
   getAgentFleet,
+  getAgentRunActivity,
   getInsights,
   getWorkItemChanges,
   getWorkItemFileDiff,
@@ -160,6 +161,15 @@ const projectWorkItemDependenciesKey = (projectId: string) =>
   ["projects", projectId, "work-items", "dependencies"] as const;
 const workItemEventsKey = (projectId: string, workItemId: string) =>
   ["projects", projectId, "work-items", workItemId, "events"] as const;
+// Nested under the same `["work-items", <id>]` prefix a WORK_ITEM channel signal invalidates
+// whole (eventStream.ts, scopesForSignal): every `WORKSPACE_TOOL_CALL_CHANGED` Event that feeds
+// this AgentRun's DAEMON_AUDITED entries already carries this work item as its aggregate, so the
+// existing signal wiring refreshes this feed for free -- no new scope needed for that side. The
+// PROVIDER_REPORTED side records no Event (activity.ts), so it has no push signal at all yet; this
+// query still catches up whenever anything else on the item invalidates the prefix, and on the
+// channel's own reconnect (`invalidateAll`).
+const workItemRunActivityKey = (workItemId: string, agentRunId: string) =>
+  ["work-items", workItemId, "run-activity", agentRunId] as const;
 const workItemWorkflowKey = (workItemId: string) => ["work-items", workItemId, "workflow"] as const;
 const workItemVerificationRunsKey = (workItemId: string) =>
   ["work-items", workItemId, "verification-runs"] as const;
@@ -297,6 +307,31 @@ export const useAgentFleet = () =>
   useQuery({
     queryKey: agentFleetKey,
     queryFn: getAgentFleet,
+  });
+
+/**
+ * One AgentRun's merged Run Activity feed (Task 8), read oldest first and paged forward with
+ * `nextCursor` -- "a run's story", not a newest-first ticker. The first page is fetched eagerly
+ * (one bounded round trip, nowhere near "paging the whole feed") so `degraded`/`omittedCount` are
+ * known as soon as the AgentRun is; RunActivitySection.tsx gates only the *rendering* of the full
+ * list behind the owner's own expand (spec: "не становится основным содержимым Cockpit"), and
+ * fetches further pages only on an explicit "Show more", never walked automatically to find a
+ * tail. That is also why the collapsed summary prefers Agent Fleet's own newest-first
+ * `latestAction` (Task 10, `useAgentFleet`) over this oldest-first page's own last row.
+ */
+export const useAgentRunActivity = (workItemId: string | undefined, agentRunId: string | undefined) =>
+  useInfiniteQuery({
+    queryKey:
+      workItemId && agentRunId
+        ? workItemRunActivityKey(workItemId, agentRunId)
+        : ["work-items", "none", "run-activity", "none"],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
+      if (!agentRunId) throw new Error("An AgentRun is required to load its Run Activity");
+      return getAgentRunActivity(agentRunId, pageParam);
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: workItemId !== undefined && agentRunId !== undefined,
   });
 
 export const useInsights = () =>
