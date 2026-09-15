@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceToolCallRecord } from "@loomrail/contracts";
-import type { AgentRunActivityRow } from "@loomrail/persistence-sqlite";
+import type { WorkItemActivityRow } from "@loomrail/persistence-sqlite";
 
 import {
   buildAgentRunActivityPage,
@@ -10,6 +10,7 @@ import {
   mergeRunActivity,
   resolveAuditedCallsForRead,
   MAX_ACTIVITY_PAGE_SIZE,
+  type RunActivityContext,
 } from "../src/agent-run-activity.js";
 
 // Minimal fixtures shaped like the two upstream rows this module never queries the database for
@@ -40,9 +41,10 @@ const workspaceToolCall = (overrides: Partial<WorkspaceToolCallRecord> = {}): Wo
   ...overrides,
 });
 
-const reportedRow = (overrides: Partial<AgentRunActivityRow> = {}): AgentRunActivityRow => ({
+const reportedRow = (overrides: Partial<WorkItemActivityRow> = {}): WorkItemActivityRow => ({
   id: "reported-1",
   seq: 1,
+  agentRunId: "agent-run-1",
   observedAt: "2026-09-14T10:00:00.000Z",
   provider: "CODEX",
   kind: "AGENT_TEXT",
@@ -50,6 +52,15 @@ const reportedRow = (overrides: Partial<AgentRunActivityRow> = {}): AgentRunActi
   detail: "Reading the file now",
   status: null,
   truncated: false,
+  ...overrides,
+});
+
+// Matches `workspaceToolCall`/`reportedRow`'s own default `agentRunId` ("agent-run-1"), so a
+// single-run test can supply just `[runContext()]` and have every fixture's row resolve against it.
+const runContext = (overrides: Partial<RunActivityContext> = {}): RunActivityContext => ({
+  agentRunId: "agent-run-1",
+  provider: "CODEX",
+  stage: "IMPLEMENT",
   ...overrides,
 });
 
@@ -122,7 +133,7 @@ describe("buildAgentRunActivityPage", () => {
   it("attaches origin by source table and merges both into one deterministic page", () => {
     const page = buildAgentRunActivityPage({
       auditedCalls: [workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" })],
-      provider: "CODEX",
+      runs: [runContext()],
       reportedRows: [reportedRow({ id: "a1", observedAt: "2026-09-14T10:00:00.000Z" })],
       omittedCount: 0,
       degraded: false,
@@ -147,7 +158,7 @@ describe("buildAgentRunActivityPage", () => {
           failureCode: "PATH_FORBIDDEN",
         }),
       ],
-      provider: "CLAUDE_CODE",
+      runs: [runContext({ provider: "CLAUDE_CODE" })],
       reportedRows: [],
       omittedCount: 0,
       degraded: false,
@@ -171,7 +182,7 @@ describe("buildAgentRunActivityPage", () => {
   it("carries a null failureCode for a reported entry, which has no such column to read", () => {
     const page = buildAgentRunActivityPage({
       auditedCalls: [],
-      provider: "CODEX",
+      runs: [runContext()],
       reportedRows: [reportedRow({ id: "a1" })],
       omittedCount: 0,
       degraded: false,
@@ -183,7 +194,7 @@ describe("buildAgentRunActivityPage", () => {
   it("passes omittedCount and degraded through from the reported source untouched", () => {
     const page = buildAgentRunActivityPage({
       auditedCalls: [],
-      provider: "CODEX",
+      runs: [],
       reportedRows: [],
       omittedCount: 42,
       degraded: true,
@@ -193,13 +204,30 @@ describe("buildAgentRunActivityPage", () => {
     expect(page.degraded).toBe(true);
   });
 
+  it("surfaces the already-aggregated omittedCount unchanged from a page spanning several runs", () => {
+    // LIST_WORK_ITEM_ACTIVITY sums omittedCount across the WorkItem's runs in SQL (Task 1); this
+    // pins that building a real multi-run page around that number does not re-derive or clobber it.
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [
+        workspaceToolCall({ id: "w1", agentRunId: "agent-run-1" }),
+        workspaceToolCall({ id: "w2", agentRunId: "agent-run-2", startedAt: "2026-09-14T10:00:05.000Z" }),
+      ],
+      runs: [runContext({ agentRunId: "agent-run-1" }), runContext({ agentRunId: "agent-run-2" })],
+      reportedRows: [],
+      omittedCount: 7,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.omittedCount).toBe(7);
+  });
+
   it("serves the page from the window start with gap:true when the cursor names a pruned position", () => {
     // The reported row this cursor once pointed at is gone from `reportedRows` -- eviction, in
     // production -- and nothing here can tell that apart from a cursor that never existed. Both get
     // the same safe answer.
     const page = buildAgentRunActivityPage({
       auditedCalls: [workspaceToolCall({ id: "w1", startedAt: "2026-09-14T10:00:00.000Z" })],
-      provider: "CODEX",
+      runs: [runContext()],
       reportedRows: [],
       omittedCount: 5,
       degraded: false,
@@ -214,7 +242,7 @@ describe("buildAgentRunActivityPage", () => {
     const second = workspaceToolCall({ id: "w2", startedAt: "2026-09-14T10:00:05.000Z" });
     const page = buildAgentRunActivityPage({
       auditedCalls: [first, second],
-      provider: "CODEX",
+      runs: [runContext()],
       reportedRows: [],
       omittedCount: 0,
       degraded: false,
@@ -237,7 +265,7 @@ describe("buildAgentRunActivityPage", () => {
     for (let guard = 0; guard < 10; guard += 1) {
       const page = buildAgentRunActivityPage({
         auditedCalls: calls,
-        provider: "CODEX",
+        runs: [runContext()],
         reportedRows: [],
         omittedCount: 0,
         degraded: false,
@@ -264,7 +292,7 @@ describe("buildAgentRunActivityPage", () => {
     );
     const page = buildAgentRunActivityPage({
       auditedCalls: calls,
-      provider: "CODEX",
+      runs: [runContext()],
       reportedRows: [],
       omittedCount: 0,
       degraded: false,
@@ -281,10 +309,11 @@ describe("buildAgentRunActivityPage", () => {
   it("serves a MOCK AgentRun's reported-only feed instead of failing on its non-live provider", () => {
     // MOCK is a real AgentRun provider (tests and fixtures), just not one RECORD_AGENT_RUN_ACTIVITY
     // or the workspace-tool gateway is ever wired to -- so a MOCK run has no audited rows to map and
-    // `provider: null` must not stop its (perfectly normal) reported rows from reaching the page.
+    // `provider: null` must not stop its (perfectly normal) reported rows from reaching the page. Its
+    // run must still be supplied, though -- a reported row still needs its stage resolved.
     const page = buildAgentRunActivityPage({
       auditedCalls: [],
-      provider: null,
+      runs: [runContext({ provider: null })],
       reportedRows: [reportedRow({ id: "a1" })],
       omittedCount: 0,
       degraded: false,
@@ -296,12 +325,12 @@ describe("buildAgentRunActivityPage", () => {
   it("refuses to guess a provider for an audited entry that should not exist", () => {
     // Defence in depth: production can never produce this combination (RECORD_AGENT_RUN_ACTIVITY
     // requires a live provider and nothing drives MOCK through the real gateway), but a caller that
-    // got AgentRun.provider wrong must not see its audited call silently mislabelled with a made-up
-    // provider instead.
+    // resolved a run's provider wrong must not see its audited call silently mislabelled with a
+    // made-up provider instead.
     expect(() =>
       buildAgentRunActivityPage({
         auditedCalls: [workspaceToolCall({ id: "w1" })],
-        provider: null,
+        runs: [runContext({ provider: null })],
         reportedRows: [],
         omittedCount: 0,
         degraded: false,
@@ -309,16 +338,165 @@ describe("buildAgentRunActivityPage", () => {
       }),
     ).toThrow(/no live provider/);
   });
+
+  it("refuses to build an entry for an audited call whose own run was never supplied", () => {
+    // Distinct from the provider===null case above: here the caller omitted the run from `runs`
+    // entirely, so there is nothing -- not even a MOCK provider -- to resolve it against.
+    expect(() =>
+      buildAgentRunActivityPage({
+        auditedCalls: [workspaceToolCall({ id: "w1", agentRunId: "agent-run-missing" })],
+        runs: [],
+        reportedRows: [],
+        omittedCount: 0,
+        degraded: false,
+        cursor: null,
+      }),
+    ).toThrow(/was not given a run for/);
+  });
+
+  it("refuses to build an entry for a reported row whose own run was never supplied", () => {
+    expect(() =>
+      buildAgentRunActivityPage({
+        auditedCalls: [],
+        runs: [],
+        reportedRows: [reportedRow({ id: "a1", agentRunId: "agent-run-missing" })],
+        omittedCount: 0,
+        degraded: false,
+        cursor: null,
+      }),
+    ).toThrow(/was not given a run for/);
+  });
+
+  it("orders entries by time across a run boundary, never by which run each one belongs to", () => {
+    // Two runs' entries interleave in time (run2, run1, run2, run1); the merged page must read out
+    // in that chronological order, proving the run boundary is not a grouping the merge respects.
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [
+        workspaceToolCall({
+          id: "w-run2-early",
+          agentRunId: "agent-run-2",
+          startedAt: "2026-09-14T10:00:01.000Z",
+        }),
+        workspaceToolCall({
+          id: "w-run1-late",
+          agentRunId: "agent-run-1",
+          startedAt: "2026-09-14T10:00:03.000Z",
+        }),
+      ],
+      reportedRows: [
+        reportedRow({
+          id: "a-run1-earliest",
+          agentRunId: "agent-run-1",
+          observedAt: "2026-09-14T10:00:00.000Z",
+        }),
+        reportedRow({ id: "a-run2-late", agentRunId: "agent-run-2", observedAt: "2026-09-14T10:00:02.000Z" }),
+      ],
+      runs: [runContext({ agentRunId: "agent-run-1" }), runContext({ agentRunId: "agent-run-2" })],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      "a-run1-earliest",
+      "w-run2-early",
+      "a-run2-late",
+      "w-run1-late",
+    ]);
+  });
+
+  it("does not drop or duplicate an entry when a page boundary lands in the middle of one run's own calls", () => {
+    // Five audited calls across two runs, ordered as LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM would
+    // hand them in. pageSize 2 cuts page 1 inside agent-run-1's own calls (after its 2nd, before its
+    // 3rd) and page 2 straddles the run boundary itself (agent-run-1's 3rd call, then agent-run-2's
+    // 1st) -- both a mid-run cut and a cross-run page in one sweep.
+    const calls = [
+      workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
+      workspaceToolCall({ id: "w2", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:01.000Z" }),
+      workspaceToolCall({ id: "w3", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:02.000Z" }),
+      workspaceToolCall({ id: "w4", agentRunId: "agent-run-2", startedAt: "2026-09-14T10:00:03.000Z" }),
+      workspaceToolCall({ id: "w5", agentRunId: "agent-run-2", startedAt: "2026-09-14T10:00:04.000Z" }),
+    ];
+    const runs = [runContext({ agentRunId: "agent-run-1" }), runContext({ agentRunId: "agent-run-2" })];
+    const pageSize = 2;
+    const seen: string[] = [];
+    let cursor: ReturnType<typeof decodeCursor> = null;
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = buildAgentRunActivityPage({
+        auditedCalls: calls,
+        reportedRows: [],
+        runs,
+        omittedCount: 0,
+        degraded: false,
+        cursor,
+        pageSize,
+      });
+      seen.push(...page.entries.map((entry) => entry.id));
+      if (page.nextCursor === null) break;
+      cursor = decodeCursor(page.nextCursor);
+    }
+    expect(seen).toEqual(["w1", "w2", "w3", "w4", "w5"]);
+  });
+
+  it("labels each entry with its own run's stage and agentRunId, never another run's", () => {
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [
+        workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
+      ],
+      reportedRows: [
+        reportedRow({ id: "a1", agentRunId: "agent-run-2", observedAt: "2026-09-14T10:00:01.000Z" }),
+      ],
+      runs: [
+        runContext({ agentRunId: "agent-run-1", stage: "PLAN" }),
+        runContext({ agentRunId: "agent-run-2", stage: "REVIEW" }),
+      ],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries.map((entry) => [entry.id, entry.agentRunId, entry.stage])).toEqual([
+      ["w1", "agent-run-1", "PLAN"],
+      ["a1", "agent-run-2", "REVIEW"],
+    ]);
+  });
+
+  it("restarts an audited run's own seq at 1, matching the contract's per-run promise", () => {
+    // The contract's own doc comment on `seq` promises it is monotonic "within a run's own source".
+    // A global running count across the whole page would give agent-run-2's first call seq 3 instead
+    // of 1, breaking that promise the moment a page holds more than one run's audited calls.
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [
+        workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
+        workspaceToolCall({ id: "w2", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:01.000Z" }),
+        workspaceToolCall({ id: "w3", agentRunId: "agent-run-2", startedAt: "2026-09-14T10:00:02.000Z" }),
+      ],
+      reportedRows: [],
+      runs: [runContext({ agentRunId: "agent-run-1" }), runContext({ agentRunId: "agent-run-2" })],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries.map((entry) => [entry.id, entry.agentRunId, entry.seq])).toEqual([
+      ["w1", "agent-run-1", 1],
+      ["w2", "agent-run-1", 2],
+      ["w3", "agent-run-2", 1],
+    ]);
+  });
 });
 
 describe("resolveAuditedCallsForRead", () => {
   it("passes audited calls through unchanged for a live provider", () => {
     const calls = [workspaceToolCall({ id: "w1" })];
-    expect(resolveAuditedCallsForRead(calls, "CODEX")).toEqual({ auditedCalls: calls, degraded: false });
+    expect(resolveAuditedCallsForRead(calls, [runContext()])).toEqual({
+      auditedCalls: calls,
+      degraded: false,
+    });
   });
 
   it("passes an empty list through for a MOCK (null) provider -- the ordinary case", () => {
-    expect(resolveAuditedCallsForRead([], null)).toEqual({ auditedCalls: [], degraded: false });
+    expect(resolveAuditedCallsForRead([], [runContext({ provider: null })])).toEqual({
+      auditedCalls: [],
+      degraded: false,
+    });
   });
 
   // The read-boundary fix this guards: a MOCK AgentRun that somehow does have audited rows (fixture
@@ -327,18 +505,36 @@ describe("resolveAuditedCallsForRead", () => {
   // GET into a 500. Dropping the orphaned calls and flagging `degraded` keeps the read alive.
   it("drops orphaned audited calls for a null provider and flags the page degraded", () => {
     const calls = [workspaceToolCall({ id: "w1" })];
-    expect(resolveAuditedCallsForRead(calls, null)).toEqual({ auditedCalls: [], degraded: true });
+    expect(resolveAuditedCallsForRead(calls, [runContext({ provider: null })])).toEqual({
+      auditedCalls: [],
+      degraded: true,
+    });
     // And the drop actually neutralises the throw `buildAgentRunActivityPage` would otherwise raise.
-    const resolved = resolveAuditedCallsForRead(calls, null);
+    const resolved = resolveAuditedCallsForRead(calls, [runContext({ provider: null })]);
     expect(() =>
       buildAgentRunActivityPage({
         auditedCalls: resolved.auditedCalls,
-        provider: null,
+        runs: [runContext({ provider: null })],
         reportedRows: [],
         omittedCount: 0,
         degraded: resolved.degraded,
         cursor: null,
       }),
     ).not.toThrow();
+  });
+
+  it("drops only the orphaned run's calls when several runs are in scope, and flags the page degraded", () => {
+    // A WorkItem's runs can straddle live and MOCK providers -- e.g. a MOCK fixture run alongside
+    // real ones. One run's orphaned calls must not push every other run's calls out of the page too.
+    const healthy = workspaceToolCall({ id: "w1", agentRunId: "agent-run-1" });
+    const orphaned = workspaceToolCall({ id: "w2", agentRunId: "agent-run-2" });
+    const resolved = resolveAuditedCallsForRead(
+      [healthy, orphaned],
+      [
+        runContext({ agentRunId: "agent-run-1", provider: "CODEX" }),
+        runContext({ agentRunId: "agent-run-2", provider: null }),
+      ],
+    );
+    expect(resolved).toEqual({ auditedCalls: [healthy], degraded: true });
   });
 });

@@ -215,6 +215,7 @@ import {
   resolveAuditedCallsForRead,
   REPORTED_ENTRIES_FETCH_LIMIT,
   type ActivityCursor,
+  type RunActivityContext,
 } from "./agent-run-activity.js";
 import { cleanupExpiredAgentRunActivity } from "./agent-run-activity-retention.js";
 import { broadcastingState } from "./broadcasting-state.js";
@@ -442,10 +443,9 @@ const scaffoldParamsSchema = z.object({ operationId: opaqueIdSchema }).strict();
 const mcpProposalParamsSchema = z.object({ projectId: opaqueIdSchema, challengeId: opaqueIdSchema }).strict();
 const mcpRevisionParamsSchema = z.object({ projectId: opaqueIdSchema, revisionId: opaqueIdSchema }).strict();
 const workItemParamsSchema = z.object({ workItemId: opaqueIdSchema }).strict();
-const agentRunActivityParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 // Opaque per Task 8's contract: this daemon never inspects `after` beyond handing it to
 // `decodeCursor`, so the only runtime shape worth asserting here is "a non-empty string, if present".
-const agentRunActivityQuerySchema = z.object({ after: z.string().min(1).max(1_000).optional() }).strict();
+const workItemActivityQuerySchema = z.object({ after: z.string().min(1).max(1_000).optional() }).strict();
 const verificationRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchMeasurementRunParamsSchema = z.object({ runId: opaqueIdSchema }).strict();
 const launchReleaseParamsSchema = z.object({ releaseId: opaqueIdSchema }).strict();
@@ -3404,26 +3404,26 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     });
 
     // Merges `workspace_tool_calls` (daemon-audited) with `agent_run_activity` (provider-reported)
-    // into one chronological feed on read -- see apps/daemon/src/agent-run-activity.ts. Mirrors the
-    // verification-checks/output route directly above: `requireSession`, `requestCorrelationId`,
-    // `cache-control: no-store` and `x-content-type-options: nosniff` on a bounded, redacted body.
+    // into one chronological feed on read, scoped to the WorkItem rather than one AgentRun (spec 128
+    // / ADR-0034) -- see apps/daemon/src/agent-run-activity.ts. Mirrors the verification-checks/output
+    // route above: `requireSession`, `requestCorrelationId`, `cache-control: no-store` and
+    // `x-content-type-options: nosniff` on a bounded, redacted body.
     //
     // No project-scoped ACL exists anywhere in this daemon (`requireSession` is the whole of it --
-    // one local owner, one session), so "a run the caller cannot see" is enforced the same way every
-    // other :id-scoped route here enforces it: the AgentRun either exists or this answers 404, same
-    // as GET_WORK_ITEM/GET_AGENT_RUN elsewhere never leak which opaque ids are real.
-    app.get("/api/v1/agent-runs/:runId/activity", (request, reply) => {
+    // one local owner, one session), so "a WorkItem the caller cannot see" is enforced the same way
+    // every other :id-scoped route here enforces it: the WorkItem either exists or this answers 404,
+    // same as every other work-item-scoped route (`WorkItemDomainError("WORK_ITEM_NOT_FOUND", ...)`,
+    // mapped to 404 by `sendOperationError`) rather than the bespoke inline 404 the AgentRun-scoped
+    // route this replaces used to send.
+    app.get("/api/v1/work-items/:workItemId/activity", (request, reply) => {
       const correlationId = requestCorrelationId(request);
       if (!requireSession(request, reply, correlationId)) return;
       try {
-        const params = agentRunActivityParamsSchema.parse(request.params);
-        const query = agentRunActivityQuerySchema.parse(request.query);
-        const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId: params.runId });
-        const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
-        if (agentRun === undefined) {
-          return reply
-            .code(404)
-            .send(createError("AGENT_RUN_NOT_FOUND", "The AgentRun does not exist", correlationId));
+        const params = workItemParamsSchema.parse(request.params);
+        const query = workItemActivityQuerySchema.parse(request.query);
+        const workItemResult = localState.query({ type: "GET_WORK_ITEM", workItemId: params.workItemId });
+        if (workItemResult.type !== "WORK_ITEM" || workItemResult.workItem === null) {
+          throw new WorkItemDomainError("WORK_ITEM_NOT_FOUND", "The WorkItem does not exist");
         }
         // A cursor is client-supplied input like any other (Task 8): `undefined` means the first
         // page, but a present-and-unparseable one is refused outright rather than silently treated
@@ -3439,19 +3439,19 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
           }
         }
         const reportedResult = localState.query({
-          type: "LIST_AGENT_RUN_ACTIVITY",
-          agentRunId: params.runId,
+          type: "LIST_WORK_ITEM_ACTIVITY",
+          workItemId: params.workItemId,
           limit: REPORTED_ENTRIES_FETCH_LIMIT,
         });
-        if (reportedResult.type !== "AGENT_RUN_ACTIVITY") {
+        if (reportedResult.type !== "WORK_ITEM_ACTIVITY") {
           throw new StateStoreError(
             "PERSISTENCE_FAILURE",
             "The reported activity buffer could not be loaded",
           );
         }
         const auditedResult = localState.query({
-          type: "LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN",
-          agentRunId: params.runId,
+          type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+          workItemId: params.workItemId,
         });
         if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
           throw new StateStoreError(
@@ -3459,23 +3459,64 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             "The audited workspace tool calls could not be loaded",
           );
         }
-        // Audited rows carry no provider column of their own (ADR-0014); the AgentRun they belong to
-        // has exactly one provider for its whole lifetime, so that is the source of truth. `null` for
-        // MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures, just not one the
-        // activity feed was ever built to carry (`buildAgentRunActivityPage` treats it as "no audited
-        // entries possible", not as a request to fail -- as long as there are none to map; see the
-        // resolve step below for when there are).
-        const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
-        const resolvedProvider = runProvider.success ? runProvider.data : null;
-        // A MOCK AgentRun that somehow does have audited rows (historical data predating the
+        // Every AgentRun either source above names, resolved once: audited rows carry no provider of
+        // their own (ADR-0014), and neither source carries `stage` (Task 1 kept both entry reads free
+        // of the join that would need). `GET_WORKFLOW_SNAPSHOT` is skipped entirely when nothing
+        // references a run -- the ordinary case for a WorkItem no agent has touched yet.
+        const referencedRunIds = Array.from(
+          new Set<string>([
+            ...auditedResult.calls.map((call) => call.agentRunId),
+            ...reportedResult.entries.map((entry) => entry.agentRunId),
+          ]),
+        );
+        const runs: RunActivityContext[] = [];
+        if (referencedRunIds.length > 0) {
+          const workflowResult = localState.query({
+            type: "GET_WORKFLOW_SNAPSHOT",
+            workItemId: params.workItemId,
+          });
+          if (workflowResult.type !== "WORKFLOW_SNAPSHOT") {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The WorkItem's workflow snapshot could not be loaded",
+            );
+          }
+          const stageAttempts = workflowResult.snapshot.stageAttempts;
+          for (const agentRunId of referencedRunIds) {
+            const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId });
+            const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
+            const stage =
+              agentRun === undefined
+                ? undefined
+                : stageAttempts.find((attempt) => attempt.id === agentRun.stageAttemptId)?.stage;
+            if (agentRun === undefined || stage === undefined) {
+              // Both reads above are already scoped to this WorkItem, so a referenced AgentRun with
+              // no matching row here means the durable state is inconsistent (an orphaned foreign
+              // key, or a stage attempt outside the WorkItem's current pipeline run), not a shape the
+              // caller could have gotten right -- unlike the MOCK-provider case just below, which is
+              // resolved rather than thrown on.
+              throw new StateStoreError(
+                "PERSISTENCE_FAILURE",
+                "A Run Activity entry references an AgentRun with incomplete durable state",
+              );
+            }
+            // `null` for MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures,
+            // just not one the activity feed was ever built to carry (`resolveAuditedCallsForRead`
+            // below treats it as "this run's audited calls, if any, are dropped and the page is
+            // flagged degraded", not as a request to fail the whole read).
+            const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
+            runs.push({ agentRunId, provider: runProvider.success ? runProvider.data : null, stage });
+          }
+        }
+        // A MOCK run that somehow does have audited rows (historical data predating the
         // provider/audited-calls invariant, or a fixture) would otherwise reach
         // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first so
         // the read degrades instead of failing outright.
-        const resolvedAudited = resolveAuditedCallsForRead(auditedResult.calls, resolvedProvider);
+        const resolvedAudited = resolveAuditedCallsForRead(auditedResult.calls, runs);
         const page = buildAgentRunActivityPage({
           auditedCalls: resolvedAudited.auditedCalls,
-          provider: resolvedProvider,
           reportedRows: reportedResult.entries,
+          runs,
           omittedCount: reportedResult.omittedCount,
           degraded: reportedResult.degraded || resolvedAudited.degraded,
           cursor,
