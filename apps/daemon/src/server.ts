@@ -120,6 +120,7 @@ import {
   verificationPlanSettingsResponseSchema,
   verificationRunSnapshotResponseSchema,
   verificationRunsResponseSchema,
+  type AgentRunActivityPage,
   type ApiErrorResponse,
   type DomainEvent,
   type PublishedWorkItemWorkspace,
@@ -131,6 +132,7 @@ import {
   type ScaffoldOperationErrorCode,
   type WorkflowStage,
   type WorkItemWorkspace,
+  type WorkspaceToolCallRecord,
 } from "@loomrail/contracts";
 import {
   adapterWorksInWorkspace,
@@ -168,6 +170,7 @@ import {
   StateStoreError,
   type OrphanProcessEvent,
   type OrphanWorkspaceEvent,
+  type WorkItemActivityRow,
 } from "@loomrail/persistence-sqlite";
 import {
   constitutionPresets,
@@ -213,7 +216,7 @@ import {
   buildAgentRunActivityPage,
   decodeCursor,
   resolveAuditedCallsForRead,
-  REPORTED_ENTRIES_FETCH_LIMIT,
+  MAX_ACTIVITY_PAGE_SIZE,
   type ActivityCursor,
   type RunActivityContext,
 } from "./agent-run-activity.js";
@@ -3438,89 +3441,138 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
               .send(createError("INVALID_ACTIVITY_CURSOR", "The activity cursor is invalid", correlationId));
           }
         }
-        const reportedResult = localState.query({
-          type: "LIST_WORK_ITEM_ACTIVITY",
-          workItemId: params.workItemId,
-          limit: REPORTED_ENTRIES_FETCH_LIMIT,
-        });
-        if (reportedResult.type !== "WORK_ITEM_ACTIVITY") {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "The reported activity buffer could not be loaded",
-          );
-        }
-        const auditedResult = localState.query({
-          type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
-          workItemId: params.workItemId,
-        });
-        if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
-          throw new StateStoreError(
-            "PERSISTENCE_FAILURE",
-            "The audited workspace tool calls could not be loaded",
-          );
-        }
-        // Every AgentRun either source above names, resolved once: audited rows carry no provider of
-        // their own (ADR-0014), and neither source carries `stage` (Task 1 kept both entry reads free
-        // of the join that would need). `GET_WORKFLOW_SNAPSHOT` is skipped entirely when nothing
-        // references a run -- the ordinary case for a WorkItem no agent has touched yet.
-        const referencedRunIds = Array.from(
-          new Set<string>([
-            ...auditedResult.calls.map((call) => call.agentRunId),
-            ...reportedResult.entries.map((entry) => entry.agentRunId),
-          ]),
-        );
-        const runs: RunActivityContext[] = [];
-        if (referencedRunIds.length > 0) {
-          const workflowResult = localState.query({
-            type: "GET_WORKFLOW_SNAPSHOT",
+        // Fix round 1 (Task 2): both source reads are now bounded to roughly one page's worth via
+        // SQL `after` (the cursor's own timestamp), not the WorkItem's entire history -- a WorkItem
+        // with several busy runs is no longer read in full on every page. `fetchWindow(undefined)`
+        // reads from the true start; `fetchWindow(cursor.at)` reads from the cursor's timestamp
+        // onward (a superset of "strictly after", by design -- see the query's own comment in
+        // packages/persistence-sqlite/src/index.ts), which is what lets `buildAgentRunActivityPage`'s
+        // existing `locateCursor` still find the cursor's own row and confirm it was not pruned.
+        const activityPageSize = MAX_ACTIVITY_PAGE_SIZE;
+        const fetchWindow = (
+          after: string | undefined,
+        ): {
+          reported: WorkItemActivityRow[];
+          audited: WorkspaceToolCallRecord[];
+          omittedCount: number;
+          degraded: boolean;
+        } => {
+          // `exactOptionalPropertyTypes` refuses `after: undefined` against an optional field, so an
+          // absent cursor omits the key entirely rather than passing it through as `undefined`.
+          const afterField = after === undefined ? {} : { after };
+          const reportedResult = localState.query({
+            type: "LIST_WORK_ITEM_ACTIVITY",
             workItemId: params.workItemId,
+            ...afterField,
+            limit: activityPageSize + 1,
           });
-          if (workflowResult.type !== "WORKFLOW_SNAPSHOT") {
+          if (reportedResult.type !== "WORK_ITEM_ACTIVITY") {
             throw new StateStoreError(
               "PERSISTENCE_FAILURE",
-              "The WorkItem's workflow snapshot could not be loaded",
+              "The reported activity buffer could not be loaded",
             );
           }
-          const stageAttempts = workflowResult.snapshot.stageAttempts;
+          const auditedResult = localState.query({
+            type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+            workItemId: params.workItemId,
+            ...afterField,
+            limit: activityPageSize + 1,
+          });
+          if (auditedResult.type !== "WORKSPACE_TOOL_CALLS") {
+            throw new StateStoreError(
+              "PERSISTENCE_FAILURE",
+              "The audited workspace tool calls could not be loaded",
+            );
+          }
+          return {
+            reported: reportedResult.entries,
+            audited: auditedResult.calls,
+            omittedCount: reportedResult.omittedCount,
+            degraded: reportedResult.degraded,
+          };
+        };
+
+        // Every AgentRun either source in `window` names, resolved once: audited rows carry no
+        // provider of their own (ADR-0014), and neither source carries `stage`. Resolved through
+        // GET_STAGE_ATTEMPT directly on the AgentRun's own `stageAttemptId` -- NOT through
+        // GET_WORKFLOW_SNAPSHOT, whose `stageAttempts` are scoped to the WorkItem's *latest*
+        // `pipeline_runs` row only. A WorkItem can accumulate more than one pipeline run over its
+        // life (`decideStartPipeline` in packages/domain/src/workflow.ts blocks a second START while
+        // one is active, not once one has finished), so an AgentRun from an earlier, already-finished
+        // pipeline run would not be found in the snapshot even though its entries are still very much
+        // live in both source tables here -- exactly the WorkItem this whole rescoping exists to keep
+        // visible. A run whose stage genuinely cannot be resolved (FK-orphaned, in a corrupted
+        // database) is dropped from this page's entries and flags `degraded`, the same graceful
+        // answer `resolveAuditedCallsForRead` already gives a MOCK run's orphaned audited calls,
+        // rather than 500ing the whole page over one run out of the WorkItem's many.
+        const buildFromWindow = (
+          window: ReturnType<typeof fetchWindow>,
+          cursorForBuild: ActivityCursor | null,
+        ): AgentRunActivityPage => {
+          const referencedRunIds = Array.from(
+            new Set<string>([
+              ...window.audited.map((call) => call.agentRunId),
+              ...window.reported.map((entry) => entry.agentRunId),
+            ]),
+          );
+          const runs: RunActivityContext[] = [];
+          const unresolvedRunIds = new Set<string>();
           for (const agentRunId of referencedRunIds) {
             const agentRunResult = localState.query({ type: "GET_AGENT_RUN", agentRunId });
             const agentRun = agentRunResult.type === "AGENT_RUNS" ? agentRunResult.runs[0] : undefined;
-            const stage =
+            const stageAttemptResult =
               agentRun === undefined
                 ? undefined
-                : stageAttempts.find((attempt) => attempt.id === agentRun.stageAttemptId)?.stage;
-            if (agentRun === undefined || stage === undefined) {
-              // Both reads above are already scoped to this WorkItem, so a referenced AgentRun with
-              // no matching row here means the durable state is inconsistent (an orphaned foreign
-              // key, or a stage attempt outside the WorkItem's current pipeline run), not a shape the
-              // caller could have gotten right -- unlike the MOCK-provider case just below, which is
-              // resolved rather than thrown on.
-              throw new StateStoreError(
-                "PERSISTENCE_FAILURE",
-                "A Run Activity entry references an AgentRun with incomplete durable state",
-              );
+                : localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId: agentRun.stageAttemptId });
+            const stageAttempt =
+              stageAttemptResult?.type === "STAGE_ATTEMPT" ? stageAttemptResult.stageAttempt : null;
+            if (agentRun === undefined || stageAttempt === null) {
+              unresolvedRunIds.add(agentRunId);
+              continue;
             }
             // `null` for MOCK -- a valid AgentRun provider this daemon uses in tests and fixtures,
             // just not one the activity feed was ever built to carry (`resolveAuditedCallsForRead`
             // below treats it as "this run's audited calls, if any, are dropped and the page is
             // flagged degraded", not as a request to fail the whole read).
             const runProvider = liveProviderIdSchema.safeParse(agentRun.provider);
-            runs.push({ agentRunId, provider: runProvider.success ? runProvider.data : null, stage });
+            runs.push({
+              agentRunId,
+              provider: runProvider.success ? runProvider.data : null,
+              stage: stageAttempt.stage,
+            });
           }
+          const stageResolutionDegraded = unresolvedRunIds.size > 0;
+          const auditedCalls = window.audited.filter((call) => !unresolvedRunIds.has(call.agentRunId));
+          const reportedRows = window.reported.filter((entry) => !unresolvedRunIds.has(entry.agentRunId));
+          // A MOCK run that somehow does have audited rows (historical data predating the
+          // provider/audited-calls invariant, or a fixture) would otherwise reach
+          // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first
+          // so the read degrades instead of failing outright.
+          const resolvedAudited = resolveAuditedCallsForRead(auditedCalls, runs);
+          return buildAgentRunActivityPage({
+            auditedCalls: resolvedAudited.auditedCalls,
+            reportedRows,
+            runs,
+            omittedCount: window.omittedCount,
+            degraded: window.degraded || resolvedAudited.degraded || stageResolutionDegraded,
+            cursor: cursorForBuild,
+            pageSize: activityPageSize,
+          });
+        };
+
+        let page = buildFromWindow(fetchWindow(cursor === null ? undefined : cursor.at), cursor);
+        // The bounded fetch above is a superset of "strictly after the cursor", never a strict
+        // subset (see fetchWindow's own comment), so a `gap` here means the cursor's row genuinely
+        // is not in this WorkItem's held data -- pruned by reported-side eviction, or a cursor that
+        // never named a real position. Either way, the correct recovery is the same "restart from
+        // the true beginning" the pre-fix single-run design always gave a gap: refetch unfiltered.
+        // (This is the one case where the AUDITED source's own `after` bound could have hidden
+        // genuinely-live history: `workspace_tool_calls` never evicts, so an audited entry older
+        // than an evicted REPORTED cursor is still valid and belongs on a gap-restarted page.)
+        if (cursor !== null && page.gap) {
+          const rebuilt = buildFromWindow(fetchWindow(undefined), null);
+          page = { ...rebuilt, gap: true };
         }
-        // A MOCK run that somehow does have audited rows (historical data predating the
-        // provider/audited-calls invariant, or a fixture) would otherwise reach
-        // `buildAgentRunActivityPage` and throw -- turning this read into a 500. Resolve it first so
-        // the read degrades instead of failing outright.
-        const resolvedAudited = resolveAuditedCallsForRead(auditedResult.calls, runs);
-        const page = buildAgentRunActivityPage({
-          auditedCalls: resolvedAudited.auditedCalls,
-          reportedRows: reportedResult.entries,
-          runs,
-          omittedCount: reportedResult.omittedCount,
-          degraded: reportedResult.degraded || resolvedAudited.degraded,
-          cursor,
-        });
         return reply
           .header("cache-control", "no-store")
           .header("x-content-type-options", "nosniff")

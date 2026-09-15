@@ -46,6 +46,7 @@ import type {
   ProviderUsageReport,
   ScaffoldOperation,
   SquadAssignment,
+  StageAttempt,
   StateCommand,
   StateCommandResult,
   WorkItem,
@@ -281,7 +282,15 @@ export type StateQuery =
   // run, so it needs every run's audited calls, not one run's. `workspace_tool_calls` already
   // carries `work_item_id` as its own column (migration 0055), so this filters on it directly --
   // no join through `agent_runs` to reach it.
-  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"; workItemId: string }
+  //
+  // Fix round 1 (Task 2): `after`/`limit` bound this to roughly one page's worth of rows instead of
+  // the WorkItem's entire audited history. `after` is a raw `observed_at`-comparable timestamp
+  // (`started_at >= after`), not the full `(at, origin, id)` cursor triple -- the daemon-side caller
+  // (apps/daemon/src/agent-run-activity.ts) locates the exact cursor position and detects eviction
+  // gaps in memory over this now-bounded read, the same way it always did over the previously
+  // unbounded one; this query's only job is to keep the read itself from growing with the WorkItem's
+  // total run count. Omitting `after` reads from the very start, same as before.
+  | { type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"; workItemId: string; after?: string; limit?: number }
   | { type: "LIST_STARTED_WORKSPACE_TOOL_CALLS" }
   | { type: "LIST_PENDING_CONSTITUTION_PUBLICATIONS" }
   | { type: "LIST_PENDING_VERIFICATION_PLAN_PUBLICATIONS" }
@@ -300,6 +309,14 @@ export type StateQuery =
   | { type: "LIST_PENDING_DISPATCHES" }
   | { type: "GET_SQUAD_ASSIGNMENT"; pipelineRunId: string }
   | { type: "GET_AGENT_RUN"; agentRunId: string }
+  // Fix round 1 (Task 2): resolves one StageAttempt directly by id, unlike `GET_WORKFLOW_SNAPSHOT`
+  // above, whose `stageAttempts` array is scoped to a WorkItem's *latest* `pipeline_runs` row only.
+  // An AgentRun's own `stageAttemptId` can name an attempt from an *earlier* pipeline run -- the
+  // domain layer allows a WorkItem to start a new pipeline once its previous one is no longer active
+  // (`decideStartPipeline` in packages/domain/src/workflow.ts only blocks an *active* run, not a
+  // finished one) -- so the activity route resolves each referenced AgentRun's stage through this,
+  // not through the snapshot, to stay correct across that boundary.
+  | { type: "GET_STAGE_ATTEMPT"; stageAttemptId: string }
   | {
       // Raw read of the prunable `agent_run_activity` buffer for one AgentRun (Task 6). Task 8's
       // merged feed layers `origin` and cross-source pagination on top of this; this query only
@@ -318,9 +335,12 @@ export type StateQuery =
       // them from.
       type: "LIST_WORK_ITEM_ACTIVITY";
       workItemId: string;
-      // Same 2_000 bound as LIST_AGENT_RUN_ACTIVITY's own `limit`, for the same reason: comfortably
-      // above one run's 1_000-row eviction cap, so a caller reading a single-run WorkItem at the cap
-      // is never refused for lack of headroom.
+      // Fix round 1 (Task 2): `after` bounds this the same way it now bounds
+      // LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM above -- see that query's own comment. `limit` is no
+      // longer read as "comfortably above one run's cap" (a WorkItem's total rows across its runs is
+      // NOT bounded by any one run's own 1_000-row eviction cap, so that reasoning never actually
+      // held once the feed spans several runs); the caller now passes roughly one page's worth.
+      after?: string;
       limit?: number;
     }
   | {
@@ -492,6 +512,7 @@ export type StateQueryResult =
   | { type: "WORKFLOW_DISPATCHES"; dispatches: WorkflowDispatch[] }
   | { type: "SQUAD_ASSIGNMENT"; assignment: SquadAssignment | null }
   | { type: "AGENT_RUNS"; runs: AgentRun[] }
+  | { type: "STAGE_ATTEMPT"; stageAttempt: StageAttempt | null }
   | {
       type: "AGENT_RUN_ACTIVITY";
       entries: AgentRunActivityRow[];

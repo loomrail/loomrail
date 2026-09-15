@@ -99,13 +99,18 @@ export const decodeCursor = (value: string): ActivityCursor | null => {
 
 // Bounded by the response schema's own `entries` cap (`agentRunActivityPageSchema`): a page cannot
 // carry more than this regardless of what the caller asks for.
+//
+// Fix round 1 (Task 2): this is now also what the caller fetches roughly this-many-plus-one of from
+// EACH source's own LIST_WORK_ITEM_ACTIVITY/LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM call, cursor
+// pushed into the SQL `after` bound -- replacing a flat 2_000-row "read everything" constant
+// (REPORTED_ENTRIES_FETCH_LIMIT, removed) whose own comment claimed 2_000 was "comfortably above one
+// run's 1_000-row eviction bound" without noticing the bound is per RUN while the read is per
+// WORKITEM: a WorkItem with three or more busy runs could already exceed it, silently losing exactly
+// the newest history (`ORDER BY observed_at ASC ... LIMIT` drops the tail) with no `degraded` or
+// `gap` to say so. Fetching bounded-by-page-size per source, per page, keeps memory flat regardless
+// of how many runs a WorkItem accumulates -- see apps/daemon/src/server.ts's route for the fetch and
+// the gap-triggered full-rewind fallback this bound requires.
 export const MAX_ACTIVITY_PAGE_SIZE = 200;
-
-// Handed to LIST_WORK_ITEM_ACTIVITY's own `limit`. Comfortably above one run's 1_000-row eviction
-// bound (Task 6) even for a WorkItem with several runs' worth of headroom to spare, so this always
-// reads back everything the buffer currently holds in one query; the merge-and-paginate below is
-// what turns that into pages, not a second round trip to the table.
-export const REPORTED_ENTRIES_FETCH_LIMIT = 2_000;
 
 /**
  * What a WorkItem's own AgentRun contributes to the merged feed besides its rows: the provider to

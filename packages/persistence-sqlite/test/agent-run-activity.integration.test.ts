@@ -1455,4 +1455,107 @@ describe("work item activity", () => {
     expect(result.calls).toHaveLength(1);
     expect(result.calls[0]).toMatchObject({ agentRunId: first.run.agentRunId, operation: "READ_FILE" });
   });
+
+  // Fix round 1 (Task 2): both work-item-scoped reads gained `after`/`limit` so the daemon route can
+  // fetch roughly one page at a time instead of the WorkItem's entire history -- a flat 2_000-row
+  // constant no longer bounds a WorkItem with several runs. `after` filters `observed_at >= ?`
+  // (deliberately inclusive of the boundary row, not `>`) because the daemon's own cursor logic
+  // needs to see the boundary row again to confirm it was not pruned -- see the query's own comment.
+  it("LIST_WORK_ITEM_ACTIVITY's `after` returns only rows observed at or after that timestamp, boundary included", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(recordActivity(execution.run, "c1", "First"));
+    localState.execute(recordActivity(execution.run, "c2", "Second"));
+    localState.execute(recordActivity(execution.run, "c3", "Third"));
+
+    const full = readWorkItemActivity(localState, execution.workItemId);
+    const boundary = full.entries[1];
+    if (!boundary) throw new Error("Expected a second entry to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORK_ITEM_ACTIVITY",
+      workItemId: execution.workItemId,
+      after: boundary.observedAt,
+      limit: 200,
+    });
+    if (page.type !== "WORK_ITEM_ACTIVITY") throw new Error("Expected a work item activity page");
+    // Inclusive: the boundary row ("Second") itself is still present, alongside everything after it.
+    expect(page.entries.map((entry) => entry.label)).toEqual(["Second", "Third"]);
+  });
+
+  it("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM's `after` returns only rows started at or after that timestamp, boundary included", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    localState.execute(startWorkspaceToolCall(execution.run, "a".repeat(64), "READ_FILE", "src/a.ts"));
+    localState.execute(startWorkspaceToolCall(execution.run, "b".repeat(64), "WRITE_FILE", "src/b.ts"));
+    localState.execute(startWorkspaceToolCall(execution.run, "c".repeat(64), "DELETE_FILE", "src/c.ts"));
+
+    const full = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: execution.workItemId,
+    });
+    if (full.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    const boundary = full.calls[1];
+    if (!boundary) throw new Error("Expected a second call to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM",
+      workItemId: execution.workItemId,
+      after: boundary.startedAt,
+      limit: 200,
+    });
+    if (page.type !== "WORKSPACE_TOOL_CALLS") throw new Error("Expected workspace tool calls");
+    expect(page.calls.map((call) => call.operation)).toEqual(["WRITE_FILE", "DELETE_FILE"]);
+  });
+
+  it("bounds LIST_WORK_ITEM_ACTIVITY's read by `limit` even when `after` is given", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    for (let index = 0; index < 5; index += 1) {
+      localState.execute(recordActivity(execution.run, `c${index.toString()}`, `Entry ${index.toString()}`));
+    }
+    const full = readWorkItemActivity(localState, execution.workItemId);
+    // Anchored on the THIRD entry, not the first: if `after` were silently ignored, this would read
+    // back the WorkItem's first two entries instead -- a different, wrong answer the test can catch.
+    // Anchoring on the first entry cannot tell "after honoured" apart from "after ignored", because
+    // both start the read at the very beginning.
+    const boundary = full.entries[2];
+    if (!boundary) throw new Error("Expected a third entry to anchor the cursor on");
+
+    const page = localState.query({
+      type: "LIST_WORK_ITEM_ACTIVITY",
+      workItemId: execution.workItemId,
+      after: boundary.observedAt,
+      limit: 2,
+    });
+    if (page.type !== "WORK_ITEM_ACTIVITY") throw new Error("Expected a work item activity page");
+    expect(page.entries).toHaveLength(2);
+    expect(page.entries.map((entry) => entry.label)).toEqual(["Entry 2", "Entry 3"]);
+  });
+
+  // Fix round 1 (Task 2): GET_STAGE_ATTEMPT resolves one StageAttempt directly by id -- unlike
+  // GET_WORKFLOW_SNAPSHOT's `stageAttempts`, which only ever covers a WorkItem's *latest* pipeline
+  // run, this is what the daemon route now uses so an AgentRun from an earlier, already-finished
+  // pipeline run still resolves. Deliberately not exercised through `startWorkItemExecution`'s
+  // two-pipeline-run machinery here -- that scenario belongs to the daemon-level HTTP test
+  // (work-item-activity-http.integration.test.ts), which proves the route's own use of this query
+  // survives it end to end. This is the query's own minimal, direct proof.
+  it("GET_STAGE_ATTEMPT resolves a StageAttempt directly by id", async () => {
+    const localState = await open();
+    const execution = startWorkItemExecution(localState, "p1");
+    const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId: execution.stageAttemptId });
+    if (result.type !== "STAGE_ATTEMPT") throw new Error("Expected a StageAttempt result");
+    expect(result.stageAttempt?.id).toBe(execution.stageAttemptId);
+    expect(result.stageAttempt?.stage).toBe("DISCOVERY");
+  });
+
+  it("GET_STAGE_ATTEMPT reads back null for a StageAttempt id nothing seeded", async () => {
+    const localState = await open();
+    const result = localState.query({
+      type: "GET_STAGE_ATTEMPT",
+      stageAttemptId: "stage-attempt-does-not-exist",
+    });
+    if (result.type !== "STAGE_ATTEMPT") throw new Error("Expected a StageAttempt result");
+    expect(result.stageAttempt).toBeNull();
+  });
 });

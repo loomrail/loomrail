@@ -1592,7 +1592,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_AGENT_RUN"), agentRunId: opaqueIdSchema })
     .strict(),
   z
-    .object({ type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"), workItemId: opaqueIdSchema })
+    .object({
+      type: z.literal("LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM"),
+      workItemId: opaqueIdSchema,
+      // Fix round 1 (Task 2): see this query variant's own comment in types.ts.
+      after: utcTimestampSchema.optional(),
+      limit: z.number().int().min(1).max(2_000).default(200),
+    })
     .strict(),
   z.object({ type: z.literal("LIST_STARTED_WORKSPACE_TOOL_CALLS") }).strict(),
   z.object({ type: z.literal("LIST_PENDING_CONSTITUTION_PUBLICATIONS") }).strict(),
@@ -1614,6 +1620,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("LIST_PENDING_DISPATCHES") }).strict(),
   z.object({ type: z.literal("GET_SQUAD_ASSIGNMENT"), pipelineRunId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_AGENT_RUN"), agentRunId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("GET_STAGE_ATTEMPT"), stageAttemptId: opaqueIdSchema }).strict(),
   z
     .object({
       type: z.literal("LIST_AGENT_RUN_ACTIVITY"),
@@ -1627,7 +1634,9 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("LIST_WORK_ITEM_ACTIVITY"),
       workItemId: opaqueIdSchema,
-      // Same bound and same reasoning as LIST_AGENT_RUN_ACTIVITY's own `limit` above.
+      // Fix round 1 (Task 2): see this query variant's own comment in types.ts. `limit`'s bound is
+      // unchanged from LIST_AGENT_RUN_ACTIVITY's own, only its meaning shifted -- see that comment.
+      after: utcTimestampSchema.optional(),
       limit: z.number().int().min(1).max(2_000).default(200),
     })
     .strict(),
@@ -3854,8 +3863,26 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
     // audited half now needs every one of the WorkItem's runs, not one. `workspace_tool_calls`
     // already carries `work_item_id` as its own column (migration 0055) -- filtered on directly,
     // no join through `agent_runs`.
+    //
+    // Fix round 1 (Task 2): gained `LIMIT ?` -- a WorkItem's total audited rows across all its runs
+    // has no bound the way one run's own history implicitly did, so an unbounded read here would
+    // grow with run count. Used for the first page (no cursor yet); `...After` below serves every
+    // later page.
     const selectWorkspaceToolCallsForWorkItem = database.prepare(
-      "SELECT * FROM workspace_tool_calls WHERE work_item_id = ? ORDER BY started_at, id",
+      "SELECT * FROM workspace_tool_calls WHERE work_item_id = ? ORDER BY started_at, id LIMIT ?",
+    );
+    // Fix round 1 (Task 2): `started_at >= ?` is deliberately a superset of "strictly after the
+    // cursor", not an exact `(started_at, id)` comparison -- it also re-reads same-timestamp rows
+    // the previous page already served. That is intentional: the daemon-side cursor logic
+    // (apps/daemon/src/agent-run-activity.ts's `locateCursor`) needs to find the cursor's own row in
+    // this window to confirm it was not pruned, and slices strictly after it once found; a filter
+    // precise enough to exclude already-served rows would also be precise enough to exclude the
+    // cursor row itself, breaking that check. The daemon caller still bounds its own `limit` to
+    // roughly one page, so the redundant re-read this can produce (same-timestamp rows already
+    // shown) never grows the read past that bound in any realistic dataset -- ISO-millisecond
+    // timestamp collisions in the hundreds, on human/agent-paced activity, do not occur in practice.
+    const selectWorkspaceToolCallsForWorkItemAfter = database.prepare(
+      "SELECT * FROM workspace_tool_calls WHERE work_item_id = ? AND started_at >= ? ORDER BY started_at, id LIMIT ?",
     );
     const selectWorkspaceToolCallsForStageAttempt = database.prepare(
       "SELECT * FROM workspace_tool_calls WHERE stage_attempt_id = ? ORDER BY started_at, id",
@@ -4308,6 +4335,16 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
       `SELECT id, seq, agent_run_id, provider, kind, label, detail, status, truncated, observed_at
        FROM agent_run_activity
        WHERE work_item_id = ?
+       ORDER BY observed_at, id
+       LIMIT ?`,
+    );
+    // Fix round 1 (Task 2): the reported-side sibling of `selectWorkspaceToolCallsForWorkItemAfter`
+    // above -- same `observed_at >= ?` superset-of-after reasoning, for the same cursor-location
+    // requirement in the daemon's `locateCursor`. Serves every page after the first.
+    const selectAgentRunActivityEntriesForWorkItemAfter = database.prepare(
+      `SELECT id, seq, agent_run_id, provider, kind, label, detail, status, truncated, observed_at
+       FROM agent_run_activity
+       WHERE work_item_id = ? AND observed_at >= ?
        ORDER BY observed_at, id
        LIMIT ?`,
     );
@@ -14675,9 +14712,14 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         case "LIST_WORKSPACE_TOOL_CALLS_FOR_WORK_ITEM":
           return {
             type: "WORKSPACE_TOOL_CALLS",
-            calls: selectWorkspaceToolCallsForWorkItem
-              .all(queryValue.workItemId)
-              .map(workspaceToolCallFromRow),
+            calls: (queryValue.after === undefined
+              ? selectWorkspaceToolCallsForWorkItem.all(queryValue.workItemId, queryValue.limit)
+              : selectWorkspaceToolCallsForWorkItemAfter.all(
+                  queryValue.workItemId,
+                  queryValue.after,
+                  queryValue.limit,
+                )
+            ).map(workspaceToolCallFromRow),
           };
         case "LIST_STARTED_WORKSPACE_TOOL_CALLS":
           return {
@@ -14843,6 +14885,8 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           const value = selectAgentRunById.get(queryValue.agentRunId);
           return { type: "AGENT_RUNS", runs: value === undefined ? [] : [agentRunFromRow(value)] };
         }
+        case "GET_STAGE_ATTEMPT":
+          return { type: "STAGE_ATTEMPT", stageAttempt: readStageAttempt(queryValue.stageAttemptId) };
         case "GET_QA_RUN": {
           const value = selectQARunById.get(queryValue.qaRunId);
           return { type: "QA_RUN", qaRun: value === undefined ? null : qaRunFromRow(value) };
@@ -14926,9 +14970,15 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           };
         }
         case "LIST_WORK_ITEM_ACTIVITY": {
-          const entries = selectAgentRunActivityEntriesForWorkItem
-            .all(queryValue.workItemId, queryValue.limit)
-            .map(workItemActivityRowFromRow);
+          const entries = (
+            queryValue.after === undefined
+              ? selectAgentRunActivityEntriesForWorkItem.all(queryValue.workItemId, queryValue.limit)
+              : selectAgentRunActivityEntriesForWorkItemAfter.all(
+                  queryValue.workItemId,
+                  queryValue.after,
+                  queryValue.limit,
+                )
+          ).map(workItemActivityRowFromRow);
           // Unlike LIST_AGENT_RUN_ACTIVITY's per-run counters read above, this is an aggregate query
           // with no GROUP BY, so it always returns exactly one row -- COALESCE inside the SQL is what
           // turns "no run of this WorkItem ever wrote a counters row" into 0/false rather than NULL,
