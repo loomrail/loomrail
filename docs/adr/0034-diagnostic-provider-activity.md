@@ -112,8 +112,12 @@ timestamps.
 The cursor is opaque base64url over that same triple, parsed back through a `.strict()` schema; a malformed or
 forged cursor is refused with `INVALID_ACTIVITY_CURSOR` rather than silently treated as "start again", and a
 cursor naming a position that has since been pruned restarts the page from the oldest entry still held with
-`gap: true` so the owner is told about the hole. `seq` is monotonic within one source and not dense, and it is
-not the cursor.
+`gap: true` so the owner is told about the hole. That is no longer `gap`'s only trigger: spec 128 also sets it
+when a source returns its whole read-ahead and the page still ends with no next cursor, where "nothing more"
+is a claim the read cannot support. `gap` therefore means "this page may be incomplete", not specifically
+"something was pruned". `seq` is monotonic within one source and not dense, and it is not the cursor; under
+spec 128's WorkItem-wide page that monotonicity holds within one source **per run**, so one source's numbering
+restarts at 1 at each run boundary.
 
 The audited action leaves the WorkItem Activity timeline for good: `WORKSPACE_TOOL_CALL_CHANGED` no longer
 renders there, which stays the work item's lifecycle history, and that exclusion does not depend on pipeline

@@ -4,10 +4,15 @@ import type { AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
 // file react-refresh expects to export only components), the same reason isWorkItemTimelineEvent
 // lives in its own module rather than WorkbenchPage.tsx.
 //
-// `degraded` and `omittedCount` are run-level facts: every page's read of them comes from the same
-// whole-buffer query (apps/daemon/src/agent-run-activity.ts), so the freshest page's value is the
-// current one. `gap`, unlike those two, is per-PAGE -- true only on the one page whose cursor
-// landed on pruned data, false on the first page and on every page fetched after it. Reading only
+// `degraded` and `omittedCount` are task-level facts: both come from one aggregate over every one of
+// the WorkItem's runs' counters rows, unaffected by which page was asked for, so the freshest page's
+// value is the current one. (The route ORs one more thing into `degraded` that IS per-page -- a run
+// whose stage would not resolve, or audited rows for a run with no live provider -- but both need a
+// data shape production cannot produce going forward: a foreign-key orphan, or a MOCK run that
+// somehow owns audited calls.) `gap`, unlike those two, is genuinely per-PAGE, and since fix round 2
+// on Task 2 it has two triggers: the page's cursor named a position no longer held, or a source
+// returned its whole read-ahead and the page still ended with no next cursor. Neither can fire on a
+// first page, and a later page tripping neither does not unsay an earlier one that did. Reading only
 // the last loaded page's `gap` would make an announced gap vanish the moment the owner loads one
 // more page: exactly the silent hole this flag exists to prevent.
 export const anyPageHasGap = (pages: readonly AgentRunActivityPage[]): boolean =>

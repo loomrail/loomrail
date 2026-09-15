@@ -66,8 +66,9 @@ export type ActivityOrigin = z.infer<typeof activityOriginSchema>;
 export const agentRunActivityEntrySchema = z
   .object({
     // The only identity that holds across the merged feed. `seq` below does not: it is monotonic
-    // per *origin*, not across the page, so two entries from different sources legitimately share a
-    // `seq` value. The cursor is `(at, origin, id)` for the same reason -- never `seq` alone.
+    // per *origin* within one *run*, not across the page, so two entries from different sources --
+    // or from two different runs of the same source -- legitimately share a `seq` value. The cursor
+    // is `(at, origin, id)` for the same reason -- never `seq` alone.
     id: z.string().min(1),
     // Monotonic within a run's own source but NOT dense: eviction leaves gaps on the reported side,
     // and a reader that treats a missing number as a defect would report every long run as broken.
@@ -93,11 +94,14 @@ export const agentRunActivityEntrySchema = z
     // from the next run's, and the two can be minutes apart or days.
     agentRunId: z.string().min(1),
     stage: workflowStageSchema,
-    // The AgentRun's own `agent_runs.ordinal` (`UNIQUE (stage_attempt_id, ordinal)`) -- the same
-    // number the Workflow panel already shows for this run's ProviderSession ("Session N"). Carried
-    // here so a reader grouping by `agentRunId` can label a group with the one number this run
-    // already carries everywhere else, instead of inventing a second, task-wide count that would
-    // disagree with it.
+    // The AgentRun's own `agent_runs.ordinal` (`UNIQUE (stage_attempt_id, ordinal)`). Carried here
+    // so a reader grouping by `agentRunId` can label a group with the number this run already
+    // carries in the database, instead of inventing a second, task-wide count that would disagree
+    // with it. NOT the Workflow panel's "Session N": that labels `provider_sessions.ordinal`, a
+    // different counter over a different table, and the two diverge the moment a context handoff
+    // starts a second ProviderSession under the same still-running AgentRun. Run Activity names this
+    // number for what it is -- "Run N", `runActivity.group.ordinal` -- for that reason; see
+    // RunActivitySection.tsx's own note beside the group heading.
     ordinal: z.number().int().positive(),
   })
   .strict();
@@ -112,8 +116,13 @@ export const agentRunActivityPageSchema = z
     nextCursor: z.string().min(1).nullable(),
     omittedCount: z.number().int().nonnegative(),
     degraded: z.boolean(),
-    // True when the cursor named a pruned position and the page restarts from the oldest entry
-    // still held, so the client can say so instead of showing a silent hole.
+    // "This page may be incomplete", from either of two causes the client cannot tell apart and
+    // does not need to: the cursor named a position no longer held, so the page restarted from the
+    // oldest entry still there; or a source returned its entire read-ahead and the page still ended
+    // with no `nextCursor`, where "nothing more" is a claim the read cannot support. Either way the
+    // client says the list may be incomplete instead of showing a silent hole. Never set on a first
+    // page: with no cursor the page starts at index 0, so a source big enough to trip the second
+    // cause always leaves more rows than fit and `nextCursor` is non-null.
     gap: z.boolean(),
   })
   .strict();

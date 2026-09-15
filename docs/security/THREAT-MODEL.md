@@ -2496,16 +2496,20 @@ Required controls:
   the loopback daemon, scoped by WorkItem existence (spec 128 replaced the AgentRun-scoped route this feed
   first shipped with, and deleted it), and answers `cache-control: no-store` plus
   `x-content-type-options: nosniff` with at most 200 entries. The cursor is opaque and re-parsed through a strict
-  schema; a forged or malformed one is refused, never used as a query parameter, and a cursor naming a pruned
-  position restarts the page with an explicit `gap`. Recording is guarded by a SYSTEM/session-loop actor check.
+  schema; a forged or malformed one is refused outright rather than interpolated anywhere, and a cursor naming
+  a pruned position restarts the page with an explicit `gap` — which a source returning its whole read-ahead
+  onto a page that still ends also sets, so `gap` means "this page may be incomplete", not specifically
+  "something was pruned". A cursor that does parse contributes only its own timestamp, and only as a bound SQL
+  parameter. Recording is guarded by a SYSTEM/session-loop actor check.
 - **Bounded growth and honest loss.** At most 1,000 entries are kept per run, oldest evicted, with the dropped
   count shown. The in-memory queue is capped at 500 and writes happen off the provider's stdout path, so a chatty
   provider cannot exhaust the daemon; the event-channel frame is unchanged and its signal is debounced.
 - **Failure cannot reach the run.** `onActivity` runs inside the guarded stdout listener, where a throw would
   stop the child and fail the session, so it validates, redacts and enqueues only, with every throwing call —
-  the logger included — inside a further guard. Any loss sets a per-run `degraded` flag written by its own
-  transaction, and startup reconciliation marks every interrupted AgentRun degraded because its queue died with
-  the process.
+  the logger included — inside a further guard. A recorder failure — a full queue, a failed write, a throw from
+  the recorder itself — sets a per-run `degraded` flag written by its own transaction, and startup
+  reconciliation marks every interrupted AgentRun degraded because its queue died with the process. Not every
+  loss sets it; the residual risk below says which do not.
 
 Required verification, all present:
 

@@ -119,9 +119,11 @@ export const MAX_ACTIVITY_PAGE_SIZE = 200;
  * stage to name its group with in the UI (neither source table carries `stage` -- resolving it would
  * need a join through `stage_attempts` that Task 1 deliberately kept out of both entry reads), and
  * the run's own `ordinal` (fix round 1 on Task 3: a reader grouping by `agentRunId` needs a number to
- * label the group with, and this is the one the AgentRun itself already carries -- the same value the
- * Workflow panel's own "Session N" already shows for it -- rather than a client-invented count that
- * would read differently for the same run in two different panels).
+ * label the group with, and this is the one the AgentRun itself already carries, rather than a
+ * client-invented count that would read differently for the same run in two different panels). That
+ * is NOT the Workflow panel's "Session N", which labels `provider_sessions.ordinal` -- a different
+ * counter over a different table, diverging from this one as soon as a context handoff starts a
+ * second ProviderSession under the same still-running AgentRun (fix round 2 on Task 3).
  *
  * Keyed by `agentRunId` rather than positional, so a page spanning several runs can look either
  * source's own per-entry `agentRunId` up directly instead of the caller pre-sorting or zipping rows

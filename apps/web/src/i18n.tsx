@@ -1394,7 +1394,8 @@ const en = {
   "runActivity.degradedBadge": "Incomplete",
   "runActivity.degraded":
     "This feed is incomplete: something kept a recorder from writing to it during this run.",
-  "runActivity.gap": "Earlier entries were pruned, so this list restarts from the oldest one still kept.",
+  "runActivity.gap":
+    "This list may be incomplete: Loomrail cannot confirm that every recorded entry for this task is shown here.",
   "runActivity.omitted": "{count} earlier entries were dropped because storage is limited.",
   "runActivity.loadMore": "Show more",
   "field.title": "title",
@@ -2793,7 +2794,8 @@ const ru = {
   "runActivity.truncated": "Обрезано",
   "runActivity.degradedBadge": "Неполно",
   "runActivity.degraded": "Эта лента неполна: что-то помешало записи во время этого прогона.",
-  "runActivity.gap": "Более ранние записи были вытеснены, список начинается с самой старой из оставшихся.",
+  "runActivity.gap":
+    "Список может быть неполным: Loomrail не может подтвердить, что здесь показаны все записанные действия этой задачи.",
   "runActivity.omitted": "{count} более ранних записей были отброшены из-за ограниченного хранения.",
   "runActivity.loadMore": "Показать ещё",
   "field.title": "название",

@@ -276,12 +276,17 @@ describe("RunActivityView", () => {
     expect(expandedDegraded).toContain("This feed is incomplete");
   });
 
-  it("says plainly when the page restarted from the window start because the cursor pointed at pruned data", () => {
+  // The notice must not name a mechanism, because `gap` has two causes the page cannot tell apart
+  // (a cursor naming a position no longer held; a source returning its whole read-ahead onto a page
+  // that still ended) and the old copy asserted the first one unconditionally -- telling the owner
+  // entries "were pruned" on a page where nothing was. It says only what holds either way.
+  it("says the list may be incomplete when the page is flagged, without claiming why", () => {
     const withoutGap = renderView({ entries: [entry()], expanded: true, gap: false });
     const withGap = renderView({ entries: [entry()], expanded: true, gap: true });
 
-    expect(withoutGap).not.toContain("pruned");
-    expect(withGap).toContain("pruned");
+    expect(withoutGap).not.toContain("may be incomplete");
+    expect(withGap).toContain("may be incomplete");
+    expect(withGap).not.toContain("pruned");
   });
 
   it("renders provider text as text, not as markup", () => {

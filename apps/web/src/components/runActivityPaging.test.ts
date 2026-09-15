@@ -3,10 +3,12 @@ import type { AgentRunActivityPage, WorkItem } from "@loomrail/contracts";
 
 import { anyPageHasGap, hasStartedWorkflow } from "./runActivityPaging";
 
-// Fix round 1: `gap` is per-page (true only on the page whose cursor landed on pruned data), not
-// run-level like `degraded`/`omittedCount`. Reading only the most recently loaded page's `gap`
-// made an announced gap vanish the moment the owner loaded one more page -- the exact silent hole
-// the flag exists to prevent. This is the one-line rule that fixes it, tested on its own.
+// Fix round 1: `gap` is per-page -- set on the page that ran into one of its two causes (a cursor
+// naming a position no longer held, or a source returning its whole read-ahead onto a page that
+// still ended) -- not task-level like `degraded`/`omittedCount`. Reading only the most recently
+// loaded page's `gap` made an announced gap vanish the moment the owner loaded one more page -- the
+// exact silent hole the flag exists to prevent. This is the one-line rule that fixes it, tested on
+// its own.
 
 const page = (overrides: Partial<AgentRunActivityPage> = {}): AgentRunActivityPage => ({
   entries: [],
@@ -27,19 +29,20 @@ describe("anyPageHasGap", () => {
   });
 
   it("stays true once any loaded page reported a gap, even pages fetched after it", () => {
-    // Page 1: no gap (a first page is never a gap). Page 2: the cursor from page 1 landed on
-    // pruned data, so this page restarted from the window start and is flagged. Page 3: fetched
-    // afterwards, itself not a gap -- but the announcement must not disappear because of it.
+    // Page 1: no gap (a first page can trip neither cause). Page 2: flagged -- the cursor from page
+    // 1 landed on a position no longer held, or the page ended on a source's full read-ahead.
+    // Page 3: fetched afterwards, itself not a gap -- but the announcement must not disappear
+    // because of it.
     expect(anyPageHasGap([page({ gap: false }), page({ gap: true }), page({ gap: false })])).toBe(true);
   });
 });
 
 // Fix round 1 on Task 3: this predicate is the whole of RunActivitySection's "never started"
 // gate (`if (!hasStartedWorkflow(item)) return null;`), pulled out so the boolean logic itself has
-// a test -- the container that wires it in has none, by the repository's own container/view split
-// (only the pure view renders via renderToStaticMarkup; a container that calls two live hooks
-// cannot be rendered the same way). See RunActivitySection.tsx's own doc comment and this task's
-// report for why that half stays unverified by an automated test.
+// a test. The container that wires it in is covered too, by fix round 2 on Task 3: the two
+// `describe("RunActivitySection")` cases in RunActivitySection.test.tsx render the real container
+// through a hoisted `vi.mock("../workspace")`, so neither half of the gate rests on a live e2e run
+// any more.
 describe("hasStartedWorkflow", () => {
   const item = (currentStage: WorkItem["currentStage"]): Pick<WorkItem, "currentStage"> => ({
     currentStage,
