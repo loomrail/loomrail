@@ -1878,7 +1878,8 @@ test.describe("authenticated walking skeleton", () => {
     // any load. This is the same audited action a stale assertion further down used to look for in
     // the now-removed WorkItem-lifecycle Activity timeline (workItemTimeline.ts's
     // `isWorkItemTimelineEvent` excludes WORKSPACE_TOOL_CALL_CHANGED from it entirely; Run Activity
-    // is its only home now).
+    // shows it while this stage is current; once the pipeline advances, it's not visible on any screen,
+    // though rows stay in `workspace_tool_calls` and the change is visible in Changes).
     //
     // `releaseImplementationWrite` runs in a `finally`: the provider double's `start` is parked on
     // the promise it resolves (workspaceExercisingProvider, above), so if this assertion times out
