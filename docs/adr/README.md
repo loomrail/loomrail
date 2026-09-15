@@ -42,3 +42,4 @@ record.
 | [0032](0032-platform-scoped-stable-release.md)                       | Accepted              | Stable eligibility includes an exact support target  |
 
 - [ADR-0033 — Stage context and single-copy workspace tool results](0033-stage-context-and-single-copy-tool-results.md)
+- [ADR-0034 — Bounded diagnostic provider activity](0034-diagnostic-provider-activity.md)

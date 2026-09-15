@@ -446,6 +446,8 @@ Required controls and verification:
 Residual risk remains: a process with the same OS-user authority can read files or memory before/after redaction and
 can tamper with retained diagnostics. Logs are investigation aids, not integrity evidence; encryption-at-rest and
 remote support upload are not claimed. Raw provider stdout/stderr remains deliberately unrecorded under SD-003.
+The level-1 Run Activity feed (ADR-0034) does not change that: it records a bounded, redacted projection of what
+a provider reported doing, never the stream itself — see the Run Activity diagnostic delta below.
 
 ### Q8 guided-setup delta (T42)
 
@@ -2455,3 +2457,87 @@ checkpoint. New sessions remain self-contained and do not assume a provider cach
 Workspace results retain their complete typed result exactly once; audit/CAS/range/truncation/errors are unchanged.
 No repeated operation is turned into synthetic success. Tests cover hostile framing, mandatory floor, omission
 provenance, lineage/restart, unknown cache accounting, MCP delivery and measured six-stage workflow.
+
+### Run Activity diagnostic delta (T87)
+
+**T87 — a diagnostic feed of provider self-reports leaks local secrets, smuggles untrusted text into the owner's
+UI, or is mistaken for evidence. High.** ADR-0034 reverses the adapters' deliberate discard of provider action
+events and records a bounded, redacted projection of them. Nothing raw is added: raw provider stdout/stderr
+remains unrecorded under SD-003, and the Q7 statement above stays true. What is new is a per-AgentRun record of
+what the provider said it did, merged on read with the daemon-audited `workspace_tool_calls` of ADR-0014 and shown
+in the Task Cockpit and the Agent Fleet table.
+
+Required controls:
+
+- **No authority.** Neither command (`RECORD_AGENT_RUN_ACTIVITY`, `MARK_AGENT_RUN_ACTIVITY_DEGRADED`) appends a
+  domain Event; `@loomrail/domain` never reads the table; the feed takes no part in Acceptance, the acceptance
+  package, the launch evidence package, insights, reporting export or the crash payload. The IMPLEMENT completion
+  gate still requires an audited mutation. `git diff` against the worktree remains the account of what changed.
+- **Bounded capture.** Only `label` (≤500 chars), `detail` (≤2,000), `status` (≤120), a provider action key
+  (≤200) and two booleans are recorded. Command output (`aggregated_output`), tool-result content, file-change
+  content and the raw `tool_use.input` object are never read; a Claude Code call contributes one target value
+  looked up by tool name from a closed table. Claude Code `system` lines — the CLI's own init output and the
+  owner's hook stdout/stderr — are absent from the parsed unions, so they cannot reach an entry through an
+  unseen subtype.
+- **Redaction before persistence.** Every recorded string passes `sanitizeSupervisedOutput`
+  (`@loomrail/process-supervision`) with the workspace executor's own `secretRedactions` set plus this session's
+  worktree path, which strips ANSI escapes and control characters and replaces each redaction value with
+  `[REDACTED]`. Reported paths are normalized against the worktree first; a path resolving outside it, or any
+  absolute path in a session without a worktree, becomes `[path outside workspace]` rather than a relative escape
+  that still describes the owner's layout. Over-long text is cut on a code-point boundary and flagged
+  `truncated`.
+- **Origin is computed, never stored.** `DAEMON_AUDITED` and `PROVIDER_REPORTED` are assigned by the reader from
+  which table a row came from, so a provider cannot claim audited standing; storage stays separate and the
+  append-only audit is never written by this path.
+- **Untrusted text stays inert.** Provider `label`/`detail`/`status` are rendered as React text nodes, never as
+  Markdown, HTML or links, in both the Cockpit section and the Fleet column; only the closed
+  `workspaceTool.*` codes of audited rows are used as translation keys.
+- **Bounded surface and inputs.** `GET /api/v1/agent-runs/:runId/activity` is `requireSession`-gated on the
+  loopback daemon, scoped by AgentRun existence, and answers `cache-control: no-store` plus
+  `x-content-type-options: nosniff` with at most 200 entries. The cursor is opaque and re-parsed through a strict
+  schema; a forged or malformed one is refused, never used as a query parameter, and a cursor naming a pruned
+  position restarts the page with an explicit `gap`. Recording is guarded by a SYSTEM/session-loop actor check.
+- **Bounded growth and honest loss.** At most 1,000 entries are kept per run, oldest evicted, with the dropped
+  count shown. The in-memory queue is capped at 500 and writes happen off the provider's stdout path, so a chatty
+  provider cannot exhaust the daemon; the event-channel frame is unchanged and its signal is debounced.
+- **Failure cannot reach the run.** `onActivity` runs inside the guarded stdout listener, where a throw would
+  stop the child and fail the session, so it validates, redacts and enqueues only, with every throwing call —
+  the logger included — inside a further guard. Any loss sets a per-run `degraded` flag written by its own
+  transaction, and startup reconciliation marks every interrupted AgentRun degraded because its queue died with
+  the process.
+
+Required verification, all present:
+
+- `apps/daemon/test/agent-run-activity-leak.integration.test.ts` — "keeps activity-reported text out of the
+  acceptance package export, the insights payload and structured logs" drives a synthetic canary through the
+  real pipeline and asserts it in none of those surfaces nor the launch evidence package; "redacts a configured
+  secret and opaques an absolute path before either reaches the merged activity feed" supplies the secret the way
+  production does (an environment variable whose name looks like a credential) and asserts, on the HTTP response
+  body, that the canary is gone, that an outside path became the opaque marker, and that a spaces-and-Cyrillic
+  path inside the worktree survives as a plain relative path.
+- `apps/daemon/test/session-activity.integration.test.ts` — the run finishes and the feed is marked degraded when
+  every write throws, and again when the degraded mark itself cannot be written; a contract-invalid entry is
+  dropped without failing the run; the queue's tail is written at session end; queue overflow degrades rather
+  than grows; one burst produces one content-free signal; degradation carries across sessions of the same run.
+- `packages/provider-claude-code/test/activity.unit.test.ts` — "drops every system event, including hook events",
+  "never carries tool result content", and the action-key cases, all against real recorded streams.
+- `packages/provider-codex/test/activity.unit.test.ts` — commands, exit codes and paths-without-content from a
+  real recorded workspace-write run; `packages/provider-codex/test/adapter-activity.unit.test.ts` proves the
+  adapter wiring itself and that a line producing activity is no longer counted unused.
+- `packages/persistence-sqlite/test/agent-run-activity.integration.test.ts` — 1,005 entries yield 1,000 rows and
+  `omittedCount` 5, `seq` stays monotonic across eviction, the actor guard rejects a non-session-loop caller, and
+  startup reconciliation marks interrupted runs degraded.
+- `apps/daemon/test/agent-run-activity.unit.test.ts` — deterministic merge order on equal timestamps, origin by
+  source table, and cursor rejection for non-base64url, non-JSON, forged-field, unknown-origin and invalid-instant
+  inputs; `apps/daemon/test/agent-run-activity-http.integration.test.ts` covers the authenticated boundary.
+- `e2e/run-activity.spec.ts` — the section is collapsed and absent from the DOM until expanded, the audited write
+  appears exactly once and not in the lifecycle Activity timeline, and a provider-reported entry appends live to
+  an already-rendered list through the channel alone.
+
+Residual risk: the feed is untrusted text the owner reads, and a provider can fill it with plausible but false
+claims about its own work; it is labelled as such and proves nothing. It is also incomplete by construction —
+eviction, the bounded queue, dropped malformed entries and post-close reports all lose content, and only the
+first three of those set `degraded`. Every recorded entry costs one row in the append-only `commands` receipt
+table, which has no retention, and the activity table itself has no age-based cleanup: its only bound is the
+1,000-entry per-run cap. Raw provider stdout/stderr, and any owner opt-in to capture it, remain out of scope and
+would need their own decision.
