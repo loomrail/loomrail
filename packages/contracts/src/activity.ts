@@ -93,6 +93,12 @@ export const agentRunActivityEntrySchema = z
     // from the next run's, and the two can be minutes apart or days.
     agentRunId: z.string().min(1),
     stage: workflowStageSchema,
+    // The AgentRun's own `agent_runs.ordinal` (`UNIQUE (stage_attempt_id, ordinal)`) -- the same
+    // number the Workflow panel already shows for this run's ProviderSession ("Session N"). Carried
+    // here so a reader grouping by `agentRunId` can label a group with the one number this run
+    // already carries everywhere else, instead of inventing a second, task-wide count that would
+    // disagree with it.
+    ordinal: z.number().int().positive(),
   })
   .strict();
 

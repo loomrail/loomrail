@@ -63,6 +63,7 @@ const runContext = (overrides: Partial<RunActivityContext> = {}): RunActivityCon
   agentRunId: "agent-run-1",
   provider: "CODEX",
   stage: "IMPLEMENT",
+  ordinal: 1,
   ...overrides,
 });
 
@@ -461,6 +462,33 @@ describe("buildAgentRunActivityPage", () => {
     ]);
   });
 
+  // Fix round 1 on Task 3: the UI groups the merged feed by run and needs a number to label the
+  // group with -- the run's own `agent_runs.ordinal`, not one the reader invents. Both entry
+  // builders (audited and reported) must carry it through; distinct, non-sequential values (4 and
+  // 9, not 1 and 2) so a caller that numbered runs by page order instead of reading `ordinal` off
+  // the resolved run would fail this test.
+  it("labels each entry with its own run's ordinal, from the resolved AgentRun itself", () => {
+    const page = buildAgentRunActivityPage({
+      auditedCalls: [
+        workspaceToolCall({ id: "w1", agentRunId: "agent-run-1", startedAt: "2026-09-14T10:00:00.000Z" }),
+      ],
+      reportedRows: [
+        reportedRow({ id: "a1", agentRunId: "agent-run-2", observedAt: "2026-09-14T10:00:01.000Z" }),
+      ],
+      runs: [
+        runContext({ agentRunId: "agent-run-1", ordinal: 4 }),
+        runContext({ agentRunId: "agent-run-2", ordinal: 9 }),
+      ],
+      omittedCount: 0,
+      degraded: false,
+      cursor: null,
+    });
+    expect(page.entries.map((entry) => [entry.id, entry.ordinal])).toEqual([
+      ["w1", 4],
+      ["a1", 9],
+    ]);
+  });
+
   it("restarts an audited run's own seq at 1, matching the contract's per-run promise", () => {
     // The contract's own doc comment on `seq` promises it is monotonic "within a run's own source".
     // A global running count across the whole page would give agent-run-2's first call seq 3 instead
@@ -591,24 +619,34 @@ describe("resolveAuditedCallsForRead", () => {
 describe("resolveReferencedRuns", () => {
   // A run whose lookup succeeds twice (AgentRun found, then its StageAttempt found too).
   const workingLookup = (
-    overrides: Partial<{ provider: string; stageAttemptId: string; stage: RunActivityContext["stage"] }> = {},
+    overrides: Partial<{
+      provider: string;
+      stageAttemptId: string;
+      stage: RunActivityContext["stage"];
+      ordinal: number;
+    }> = {},
   ): RunLookup => {
     const provider = overrides.provider ?? "CODEX";
     const stageAttemptId = overrides.stageAttemptId ?? "stage-attempt-1";
     const stage = overrides.stage ?? "IMPLEMENT";
+    const ordinal = overrides.ordinal ?? 1;
     return {
-      getAgentRun: (agentRunId) => (agentRunId === "agent-run-1" ? { stageAttemptId, provider } : undefined),
+      getAgentRun: (agentRunId) =>
+        agentRunId === "agent-run-1" ? { stageAttemptId, provider, ordinal } : undefined,
       getStageAttempt: (id) => (id === stageAttemptId ? { stage } : undefined),
     };
   };
 
-  it("resolves provider and stage for every referenced run through the lookup callbacks", () => {
+  it("resolves provider, stage and ordinal for every referenced run through the lookup callbacks", () => {
+    // Non-sequential, distinct ordinals (3, 7) rather than 1 and 2 -- a caller that mistakenly
+    // numbered runs by their position in `agentRunIds` instead of reading `getAgentRun`'s own
+    // `ordinal` would produce 1 and 2 here, not 3 and 7, so this fixture actually discriminates.
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX", ordinal: 3 }
           : agentRunId === "agent-run-2"
-            ? { stageAttemptId: "stage-attempt-2", provider: "CLAUDE_CODE" }
+            ? { stageAttemptId: "stage-attempt-2", provider: "CLAUDE_CODE", ordinal: 7 }
             : undefined,
       getStageAttempt: (id) =>
         id === "stage-attempt-1"
@@ -620,14 +658,16 @@ describe("resolveReferencedRuns", () => {
     const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
     expect(result.unresolvedRunIds.size).toBe(0);
     expect(result.runs).toEqual([
-      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" },
-      { agentRunId: "agent-run-2", provider: "CLAUDE_CODE", stage: "REVIEW" },
+      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN", ordinal: 3 },
+      { agentRunId: "agent-run-2", provider: "CLAUDE_CODE", stage: "REVIEW", ordinal: 7 },
     ]);
   });
 
   it("resolves a null provider for a MOCK run instead of guessing a live one", () => {
     const result = resolveReferencedRuns(["agent-run-1"], workingLookup({ provider: "MOCK" }));
-    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: null, stage: "IMPLEMENT" }]);
+    expect(result.runs).toEqual([
+      { agentRunId: "agent-run-1", provider: null, stage: "IMPLEMENT", ordinal: 1 },
+    ]);
     expect(result.unresolvedRunIds.size).toBe(0);
   });
 
@@ -655,7 +695,7 @@ describe("resolveReferencedRuns", () => {
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
+          ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX", ordinal: 1 }
           : undefined,
       getStageAttempt: () => undefined,
     };
@@ -668,14 +708,16 @@ describe("resolveReferencedRuns", () => {
     const lookup: RunLookup = {
       getAgentRun: (agentRunId) =>
         agentRunId === "agent-run-1"
-          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX" }
+          ? { stageAttemptId: "stage-attempt-1", provider: "CODEX", ordinal: 1 }
           : agentRunId === "agent-run-2"
-            ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX" }
+            ? { stageAttemptId: "stage-attempt-gone", provider: "CODEX", ordinal: 1 }
             : undefined,
       getStageAttempt: (id) => (id === "stage-attempt-1" ? { stage: "PLAN" } : undefined),
     };
     const result = resolveReferencedRuns(["agent-run-1", "agent-run-2"], lookup);
-    expect(result.runs).toEqual([{ agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN" }]);
+    expect(result.runs).toEqual([
+      { agentRunId: "agent-run-1", provider: "CODEX", stage: "PLAN", ordinal: 1 },
+    ]);
     expect(result.unresolvedRunIds).toEqual(new Set(["agent-run-2"]));
   });
 });

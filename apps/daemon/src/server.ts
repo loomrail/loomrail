@@ -3511,7 +3511,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             const run = result.type === "AGENT_RUNS" ? result.runs[0] : undefined;
             return run === undefined
               ? undefined
-              : { stageAttemptId: run.stageAttemptId, provider: run.provider };
+              : { stageAttemptId: run.stageAttemptId, provider: run.provider, ordinal: run.ordinal };
           },
           getStageAttempt: (stageAttemptId) => {
             const result = localState.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId });

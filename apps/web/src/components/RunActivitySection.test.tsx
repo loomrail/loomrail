@@ -24,6 +24,7 @@ const entry = (overrides: Partial<AgentRunActivityEntry> = {}): AgentRunActivity
   truncated: false,
   agentRunId: "run-1",
   stage: "IMPLEMENT",
+  ordinal: 1,
   ...overrides,
 });
 
@@ -94,23 +95,35 @@ describe("RunActivityView", () => {
 
   // Spec 128: "записи сгруппированы по прогону, каждая группа названа стадией и порядковым номером
   // прогона". Two runs, each contributing consecutive entries -- the grouping guard this exercises
-  // is "one group per run, headed by that run's own stage and ordinal", not merely "every entry
-  // renders somewhere". A mutant that labelled every group with the FIRST entry's stage (instead of
-  // each group's own) would still pass every other test in this file but fails this one, because
-  // "Review" would never appear at all.
-  it("groups consecutive entries by run, each group named by its own run's stage and ordinal", () => {
+  // is "one group per run, headed by that run's own stage and its OWN backend ordinal (not a
+  // position-based count)", not merely "every entry renders somewhere". Non-sequential ordinals (3
+  // and 7, not 1 and 2) are load-bearing: a mutant that numbered groups by their position instead of
+  // reading `entry.ordinal` would print "Session 1"/"Session 2" here and still pass a fixture that
+  // happened to use sequential ordinals. A mutant that labelled every group with the FIRST entry's
+  // stage (instead of each group's own) would still pass every other test in this file but fails
+  // this one, because "Review" would never appear at all.
+  it("groups consecutive entries by run, each group named by its own run's stage and backend ordinal", () => {
     const html = renderView({
       entries: [
-        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
-        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
-        entry({ id: "a3", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 3, label: "READ_FILE" }),
+        entry({ id: "a2", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 3, label: "WRITE_FILE" }),
+        entry({
+          id: "a3",
+          seq: 1,
+          agentRunId: "run-2",
+          stage: "REVIEW",
+          ordinal: 7,
+          label: "LIST_DIRECTORY",
+        }),
       ],
       expanded: true,
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(2);
-    expect(html).toContain("Run 1");
-    expect(html).toContain("Run 2");
+    expect(html).toContain("Session 3");
+    expect(html).toContain("Session 7");
+    expect(html).not.toContain("Session 1");
+    expect(html).not.toContain("Session 2");
     // Scoped to the expanded entry LIST, not the collapsed summary above it -- the summary
     // legitimately previews the task's latest action (here, also "List directory") ahead of the
     // list, for an unrelated reason (see the "collapses to the latest action" tests below).
@@ -131,23 +144,31 @@ describe("RunActivityView", () => {
 
   // The spec's grouping rule is "consecutive entries sharing an agentRunId", not "every entry
   // sharing an agentRunId, wherever it appears". A naive `groupBy(agentRunId)` implementation would
-  // fuse the two run-1 spans below back into one group and print "Run 1" once; this fixture can only
-  // pass if the grouping walks the list in order and starts a new group the moment run-2's entry
-  // interrupts run-1's own run. The ordinal itself, though, stays keyed by agentRunId (not by which
-  // group instance it is) -- both run-1 groups must say "Run 1", never "Run 1" and "Run 3".
-  it("starts a new group when the same run's entries are not consecutive, but keeps its ordinal stable", () => {
+  // fuse the two run-1 spans below back into one group and print "Session 5" once; this fixture can
+  // only pass if the grouping walks the list in order and starts a new group the moment run-2's
+  // entry interrupts run-1's own run. The ordinal itself is simply read off each entry (fix round 1:
+  // no longer computed), so both run-1 groups trivially show the same "Session 5" -- proven here by
+  // counting its occurrences rather than assuming it.
+  it("starts a new group when the same run's entries are not consecutive, and both groups still show that run's own ordinal", () => {
     const html = renderView({
       entries: [
-        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", label: "READ_FILE" }),
-        entry({ id: "a2", seq: 1, agentRunId: "run-2", stage: "REVIEW", label: "LIST_DIRECTORY" }),
-        entry({ id: "a3", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", label: "WRITE_FILE" }),
+        entry({ id: "a1", seq: 1, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 5, label: "READ_FILE" }),
+        entry({
+          id: "a2",
+          seq: 1,
+          agentRunId: "run-2",
+          stage: "REVIEW",
+          ordinal: 2,
+          label: "LIST_DIRECTORY",
+        }),
+        entry({ id: "a3", seq: 2, agentRunId: "run-1", stage: "IMPLEMENT", ordinal: 5, label: "WRITE_FILE" }),
       ],
       expanded: true,
     });
 
     expect((html.match(/run-activity__group"/g) ?? []).length).toBe(3);
-    expect((html.match(/Run 1/g) ?? []).length).toBe(2);
-    expect(html).not.toContain("Run 3");
+    expect((html.match(/Session 5/g) ?? []).length).toBe(2);
+    expect((html.match(/Session 2/g) ?? []).length).toBe(1);
   });
 
   // "Свёрнутая сводка показывает последнее действие по задаче" -- across the whole task, not just

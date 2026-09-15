@@ -11,7 +11,7 @@ import type {
 import { Badge, Button, Icon, InspectorSection, Skeleton } from "@loomrail/ui";
 
 import { LocalConnectionRecovery } from "./LocalConnectionRecovery";
-import { anyPageHasGap } from "./runActivityPaging";
+import { anyPageHasGap, hasStartedWorkflow } from "./runActivityPaging";
 import { useI18n, type Locale, type TranslationKey, type Translator } from "../i18n";
 import { useAgentFleet, useWorkItemActivity } from "../workspace";
 
@@ -164,33 +164,36 @@ type OpenRunActivityGroup = Omit<RunActivityGroup, "entries"> & { entries: Agent
 
 /**
  * Consecutive entries sharing an `agentRunId` form one group (spec 128: "соседние записи с одним
- * agentRunId образуют группу"), headed by that run's stage and its ordinal among the runs seen so
- * far in this oldest-first feed. Deliberately NOT a `groupBy(agentRunId)` -- the merged feed is
- * chronological across the WorkItem's whole run history, so two runs' entries are never expected
- * to interleave in practice, but if they somehow did, folding every entry that shares a run id back
- * into one group (wherever it appears in the list) would misrepresent the feed's own order. Walking
- * the list once and starting a new group only when the run id actually changes is what "consecutive"
- * means here.
+ * agentRunId образуют группу"), headed by that run's stage and its own `ordinal`. Deliberately NOT
+ * a `groupBy(agentRunId)` -- the merged feed is chronological across the WorkItem's whole run
+ * history, so two runs' entries are never expected to interleave in practice, but if they somehow
+ * did, folding every entry that shares a run id back into one group (wherever it appears in the
+ * list) would misrepresent the feed's own order. Walking the list once and starting a new group
+ * only when the run id actually changes is what "consecutive" means here.
  *
- * The ordinal is keyed by `agentRunId`, not by which group instance this is: a run whose entries
- * happen to split across two groups still reads as the same "Run N" in both, because it IS the same
- * run, not two different ones.
+ * `ordinal` is read straight off the entry (`agent_runs.ordinal`, resolved once per run by the
+ * daemon -- apps/daemon/src/agent-run-activity.ts), not computed here: fix round 1 on Task 3
+ * replaced an earlier, client-computed "first appearance in this page" count after review found it
+ * could disagree with the number the Workflow panel already shows for the very same AgentRun
+ * ("Session N", from that run's own ProviderSession -- the two are kept in sync at the daemon,
+ * `provider_sessions.agent_run_id`/`ordinal`). Reading it off the entry, instead of recomputing it,
+ * is also what keeps a run's two groups (the non-consecutive case above) trivially showing the same
+ * number: they share the same underlying field, not a separately tracked counter that could drift.
  */
 const groupEntriesByRun = (entries: readonly AgentRunActivityEntry[]): readonly RunActivityGroup[] => {
   const groups: OpenRunActivityGroup[] = [];
-  const ordinalByRun = new Map<string, number>();
   for (const entry of entries) {
-    let ordinal = ordinalByRun.get(entry.agentRunId);
-    if (ordinal === undefined) {
-      ordinal = ordinalByRun.size + 1;
-      ordinalByRun.set(entry.agentRunId, ordinal);
-    }
     const openGroup = groups.at(-1);
     if (openGroup?.agentRunId === entry.agentRunId) {
       openGroup.entries.push(entry);
       continue;
     }
-    groups.push({ agentRunId: entry.agentRunId, stage: entry.stage, ordinal, entries: [entry] });
+    groups.push({
+      agentRunId: entry.agentRunId,
+      stage: entry.stage,
+      ordinal: entry.ordinal,
+      entries: [entry],
+    });
   }
   return groups;
 };
@@ -210,8 +213,11 @@ const RunActivityGroupSection = ({
         tab stop. */}
     <div className="run-activity__group-heading">
       <span className="run-activity__group-stage">{t(stageKey(group.stage))}</span>
+      {/* Reuses the Workflow panel's own "Session N" label (workflow.sessions.ordinal) for this
+          run's ordinal, rather than a Run-Activity-specific wording -- one run must carry one
+          number everywhere, not "Session 2" in one panel and something else here. */}
       <span className="run-activity__group-ordinal">
-        {t("runActivity.group.ordinal", { ordinal: group.ordinal })}
+        {t("workflow.sessions.ordinal", { ordinal: group.ordinal })}
       </span>
     </div>
     <ol className="run-activity__group-entries">
@@ -410,16 +416,18 @@ export const RunActivityView = ({
  * sessions -- a Fleet entry already names its own WorkItem, so no resolution step is needed here
  * either.
  *
- * Always renders the section, unlike the previous run-scoped version, which hid itself entirely
- * (no header at all) whenever it could not resolve a "current" AgentRun. That heuristic could not
- * survive the rescope: a WorkItem that has started but produced no activity yet -- e.g. paused for
- * budget approval before its retry ran anything -- has no live Fleet entry and an empty first page,
- * which is indistinguishable at this layer from "never started at all". `RunActivityView`'s own
- * empty state ("No run activity recorded yet") already says the honest thing for both, so guessing
- * which one it is here would only add a chance of hiding the section for a task that IS running,
- * confirmed live against e2e/run-activity.spec.ts (an earlier version of this gate did exactly that).
+ * Renders nothing -- not even the section header -- for a WorkItem that has never started its
+ * workflow (`hasStartedWorkflow`, runActivityPaging.ts): an accepted fix from review round 1 on the
+ * predecessor branch, so a task still sitting in TODO/READY does not carry an empty Run Activity
+ * card. Fix round 1 on Task 3 restores this after an earlier cut of this component removed it
+ * entirely -- that removal was itself chasing a real bug (a heuristic keyed on "does a live Fleet
+ * entry or any loaded activity exist" hid the section for a task merely paused between attempts,
+ * caught live by e2e/run-activity.spec.ts), but the fix overshot: `item.currentStage` is a signal
+ * already on the prop, set the moment START_WORKFLOW runs and never cleared again -- including
+ * through a budget pause, which is exactly the state that broke the previous heuristic -- so it
+ * gates correctly without the AgentRun-resolution chain this whole rescope exists to avoid.
  */
-export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element => {
+export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Element | null => {
   const [expanded, setExpanded] = useState(false);
   const fleetQuery = useAgentFleet();
   const fleetEntry = fleetQuery.data?.entries.find((entry) => entry.workItem.id === item.id) ?? null;
@@ -427,6 +435,8 @@ export const RunActivitySection = ({ item }: { item: WorkItem }): React.JSX.Elem
   const entries = activityQuery.data?.pages.flatMap((page) => page.entries) ?? [];
   const lastPage = activityQuery.data?.pages.at(-1);
   const gap = anyPageHasGap(activityQuery.data?.pages ?? []);
+
+  if (!hasStartedWorkflow(item)) return null;
 
   return (
     <RunActivityView

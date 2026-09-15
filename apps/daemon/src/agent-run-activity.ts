@@ -115,9 +115,13 @@ export const MAX_ACTIVITY_PAGE_SIZE = 200;
 
 /**
  * What a WorkItem's own AgentRun contributes to the merged feed besides its rows: the provider to
- * label its audited calls with (`workspace_tool_calls` carries none of its own -- ADR-0014) and the
+ * label its audited calls with (`workspace_tool_calls` carries none of its own -- ADR-0014), the
  * stage to name its group with in the UI (neither source table carries `stage` -- resolving it would
- * need a join through `stage_attempts` that Task 1 deliberately kept out of both entry reads).
+ * need a join through `stage_attempts` that Task 1 deliberately kept out of both entry reads), and
+ * the run's own `ordinal` (fix round 1 on Task 3: a reader grouping by `agentRunId` needs a number to
+ * label the group with, and this is the one the AgentRun itself already carries -- the same value the
+ * Workflow panel's own "Session N" already shows for it -- rather than a client-invented count that
+ * would read differently for the same run in two different panels).
  *
  * Keyed by `agentRunId` rather than positional, so a page spanning several runs can look either
  * source's own per-entry `agentRunId` up directly instead of the caller pre-sorting or zipping rows
@@ -132,6 +136,10 @@ export type RunActivityContext = {
   // MOCK session through the real workspace-tool gateway either).
   readonly provider: LiveProviderId | null;
   readonly stage: ActivityStage;
+  // `agent_runs.ordinal`, `UNIQUE (stage_attempt_id, ordinal)`. Resolved here rather than left for
+  // the reader to invent, for the same reason `stage` is: two different readers must not disagree
+  // about the one number that names this run.
+  readonly ordinal: number;
 };
 
 // Trimmed to exactly what `resolveReferencedRuns` reads off each row -- a lookup interface rather
@@ -140,6 +148,7 @@ export type RunActivityContext = {
 export type ReferencedAgentRun = {
   readonly stageAttemptId: string;
   readonly provider: string;
+  readonly ordinal: number;
 };
 
 export type ReferencedStageAttempt = {
@@ -205,6 +214,7 @@ export const resolveReferencedRuns = (agentRunIds: readonly string[], lookup: Ru
       agentRunId,
       provider: runProvider.success ? runProvider.data : null,
       stage: stageAttempt.stage,
+      ordinal: agentRun.ordinal,
     });
   }
   return { runs, unresolvedRunIds };
@@ -221,15 +231,16 @@ export const resolveReferencedRuns = (agentRunIds: readonly string[], lookup: Ru
  * travels in its own field instead.
  *
  * `agentRunId` comes straight off the call's own column -- `workspace_tool_calls` has always carried
- * it (ADR-0014), so unlike `stage` this needs no resolution from the caller. `seq` has no column to
- * read on this table (unlike the reported side's own `agent_run_activity.seq` counter): assigned by
- * the caller as the entry's 1-based rank within its own run's own calls, in `startedAt` order --
- * see `mapAuditedEntries` below for why that is per-run and not per-page.
+ * it (ADR-0014), so unlike `stage`/`ordinal` this needs no resolution from the caller. `seq` has no
+ * column to read on this table (unlike the reported side's own `agent_run_activity.seq` counter):
+ * assigned by the caller as the entry's 1-based rank within its own run's own calls, in `startedAt`
+ * order -- see `mapAuditedEntries` below for why that is per-run and not per-page.
  */
 const activityEntryFromWorkspaceToolCall = (
   call: WorkspaceToolCallRecord,
   provider: LiveProviderId,
   stage: ActivityStage,
+  ordinal: number,
   seq: number,
 ): AgentRunActivityEntry =>
   agentRunActivityEntrySchema.parse({
@@ -246,16 +257,18 @@ const activityEntryFromWorkspaceToolCall = (
     truncated: false,
     agentRunId: call.agentRunId,
     stage,
+    ordinal,
   } satisfies AgentRunActivityEntry);
 
 // The reported side's raw row already carries everything an entry needs, `agentRunId` included
 // (Task 1's own `WorkItemActivityRow`); this only adds the `origin` its source table implies and the
-// `stage` the caller resolved for that row's run. `failureCode` is always `null` here --
+// `stage`/`ordinal` the caller resolved for that row's run. `failureCode` is always `null` here --
 // `agent_run_activity` has no such column, since it is the provider's own unverified account, not an
 // audited outcome.
 const activityEntryFromReportedRow = (
   row: WorkItemActivityRow,
   stage: ActivityStage,
+  ordinal: number,
 ): AgentRunActivityEntry =>
   agentRunActivityEntrySchema.parse({
     id: row.id,
@@ -271,6 +284,7 @@ const activityEntryFromReportedRow = (
     truncated: row.truncated,
     agentRunId: row.agentRunId,
     stage,
+    ordinal,
   } satisfies AgentRunActivityEntry);
 
 // Where in the merged feed a page starts, and whether that start is a gap.
@@ -349,7 +363,7 @@ const mapAuditedEntries = (
     }
     const seq = (seqByRun.get(call.agentRunId) ?? 0) + 1;
     seqByRun.set(call.agentRunId, seq);
-    return activityEntryFromWorkspaceToolCall(call, context.provider, context.stage, seq);
+    return activityEntryFromWorkspaceToolCall(call, context.provider, context.stage, context.ordinal, seq);
   });
 };
 
@@ -357,7 +371,10 @@ const mapReportedEntries = (
   rows: readonly WorkItemActivityRow[],
   runs: ReadonlyMap<string, RunActivityContext>,
 ): readonly AgentRunActivityEntry[] =>
-  rows.map((row) => activityEntryFromReportedRow(row, runContextFor(runs, row.agentRunId).stage));
+  rows.map((row) => {
+    const context = runContextFor(runs, row.agentRunId);
+    return activityEntryFromReportedRow(row, context.stage, context.ordinal);
+  });
 
 export type ResolvedAuditedCalls = {
   readonly auditedCalls: readonly WorkspaceToolCallRecord[];
