@@ -369,7 +369,7 @@ describe("activity recorder", () => {
           kind: "FILE_CHANGE",
           // This stage runs without a worktree, so there is nothing an absolute path could be
           // relative TO -- and reporting it verbatim is exactly the leak SD-003 forbids.
-          label: "/Users/someone/private/notes.md",
+          label: "/Users/local owner/private/notes.md",
           detail: "src/a.ts, ../outside.ts",
           terminal: true,
         }),
