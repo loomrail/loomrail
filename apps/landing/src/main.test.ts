@@ -25,8 +25,7 @@ function renderControls(): void {
       <button data-copy><span data-copy-label data-i18n="copy">Copy</span></button>
       <pre><code data-install-commands></code></pre>
       <span data-product-version></span>
-      <section data-reveal><p data-i18n="whyTitle">Why</p></section>
-      <ol data-flow><li>Backlog</li><li>Ready</li><li>Running</li></ol>
+      <section><p data-i18n="whyTitle">Why</p></section>
     </body>
   `;
   delete document.documentElement.dataset["landingReady"];
@@ -77,13 +76,13 @@ describe("landing interactions", () => {
     document.querySelector<HTMLButtonElement>("[data-locale-toggle]")?.click();
 
     expect(document.documentElement.lang).toBe("ru");
-    expect(document.title).toBe("Loomrail — задача не заканчивается вместе с чатом.");
+    expect(document.title).toBe("Loomrail — AI-команда. Результат под контролем.");
     expect(localStorage.getItem("loomrail-landing-locale")).toBe("ru");
     expect(document.querySelector<HTMLElement>('[data-i18n="heroTitle"]')?.textContent).toBe(
-      "Задача не заканчивается вместе с чатом.",
+      "AI-команда. Результат под контролем.",
     );
     expect(document.querySelector<HTMLElement>('[data-i18n="whyTitle"]')?.textContent).toBe(
-      "Чат — плохое место для задачи.",
+      "Задача не заканчивается вместе с чатом.",
     );
     expect(document.querySelector<HTMLAnchorElement>('[data-doc-link="quick-start"]')?.href).toContain(
       "GETTING-STARTED.ru.md",
@@ -125,56 +124,6 @@ describe("landing interactions", () => {
     expect(copy?.dataset["state"]).toBe("error");
     expect(copy?.disabled).toBe(false);
     expect(copy?.textContent).toBe("Failed");
-  });
-
-  test("marks exactly one workflow stage as current", () => {
-    expect(document.querySelectorAll("[data-flow] .is-current")).toHaveLength(1);
-  });
-
-  test("leaves revealed sections untouched when the browser cannot observe them", () => {
-    expect(document.documentElement.dataset["motion"]).toBeUndefined();
-    expect(document.querySelector("[data-reveal]")?.className).toBe("");
-  });
-});
-
-describe("landing reveal", () => {
-  function stubObserver(): void {
-    Object.defineProperty(window, "IntersectionObserver", {
-      configurable: true,
-      value: class {
-        constructor(private readonly callback: IntersectionObserverCallback) {}
-        observe(target: Element): void {
-          this.callback(
-            [{ isIntersecting: true, target } as unknown as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          );
-        }
-        unobserve(): void {
-          // The reveal stub fires once on observe; nothing ever needs to be detached.
-        }
-      },
-    });
-  }
-
-  beforeEach(() => {
-    renderControls();
-    localStorage.clear();
-    stubObserver();
-  });
-
-  test("arms motion and reveals observed sections", () => {
-    stubMatchMedia(false);
-    initializeLanding(document, window);
-
-    expect(document.documentElement.dataset["motion"]).toBe("ready");
-    expect(document.querySelector("[data-reveal]")?.classList.contains("is-visible")).toBe(true);
-  });
-
-  test("never hides content for a reader who asked for reduced motion", () => {
-    stubMatchMedia(true);
-    initializeLanding(document, window);
-
-    expect(document.documentElement.dataset["motion"]).toBeUndefined();
   });
 });
 
@@ -221,9 +170,57 @@ describe("landing public contract", () => {
     expect(html).not.toMatch(/\bmock\b/i);
   });
 
-  test("repeats the never-does guarantees the README makes", () => {
-    for (const promise of ["Never commits", "Never pushes", "Never merges", "Never deploys"]) {
+  test("keeps publication control and the automatic-deployment boundary explicit", () => {
+    for (const promise of ["Never commits", "Never pushes", "Never merges", "No automatic deploy"]) {
       expect(html).toContain(promise);
     }
+  });
+  test("uses native workflow disclosure without simulated activity or scroll reveals", () => {
+    expect(parsed.querySelectorAll(".route-stage")).toHaveLength(6);
+    expect([...parsed.querySelectorAll(".route-stage summary")].map((node) => node.textContent)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Discovery"),
+        expect.stringContaining("Plan"),
+        expect.stringContaining("Implement"),
+        expect.stringContaining("Review"),
+        expect.stringContaining("QA"),
+        expect.stringContaining("Acceptance"),
+      ]),
+    );
+    expect(parsed.querySelectorAll("[data-flow], [data-reveal]")).toHaveLength(0);
+    expect(parsed.querySelectorAll(".route-stage[open]")).toHaveLength(1);
+  });
+
+  test("every public message is translated, with research and one-recipe limits intact", () => {
+    document.documentElement.innerHTML = parsed.documentElement.innerHTML;
+    delete document.documentElement.dataset["landingReady"];
+    localStorage.clear();
+    stubMatchMedia(true);
+    initializeLanding(document, window);
+    const en = [...document.querySelectorAll<HTMLElement>("[data-i18n]")].map((node) => ({
+      key: node.dataset["i18n"],
+      text: node.textContent,
+    }));
+    document.querySelector<HTMLButtonElement>("[data-locale-toggle]")?.click();
+    expect(document.documentElement.lang).toBe("ru");
+    const invariant = new Set(["heroPlatform", "runtimeValue", "platformValue", "footerIssues"]);
+    for (const node of document.querySelectorAll<HTMLElement>("[data-i18n]")) {
+      const previous = en.find((item) => item.key === node.dataset["i18n"]);
+      expect(node.textContent.trim().length).toBeGreaterThan(0);
+      if (!invariant.has(node.dataset["i18n"] ?? "")) {
+        expect(node.textContent, node.dataset["i18n"]).not.toBe(previous?.text);
+      }
+    }
+    expect(document.querySelector('[data-i18n="researchBody"]')?.textContent).toContain(
+      "пока исследование, не готовый режим",
+    );
+    expect(document.querySelector('[data-i18n="starterNewLimit"]')?.textContent).toContain("один шаблон");
+    document.querySelector<HTMLButtonElement>("[data-locale-toggle]")?.click();
+    expect(document.querySelector('[data-i18n="researchBody"]')?.textContent).toContain(
+      "researched, not shipped",
+    );
+    expect(document.querySelector('[data-i18n="starterNewLimit"]')?.textContent).toContain(
+      "One built-in recipe",
+    );
   });
 });
