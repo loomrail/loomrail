@@ -1,6 +1,7 @@
 import {
   acceptanceCriterionClaimSchema,
   checkpointDraftSchema,
+  coordinatorPlanSchema,
   humanRequestDraftSchema,
   providerOutcomeSchema,
   reviewReportDraftSchema,
@@ -233,6 +234,7 @@ const stageSchemasWithoutHumanRequest = {
 } as const;
 
 export type ProviderStageResultPolicy = {
+  codeBlindCoordinator?: boolean;
   humanRequests: "ALLOWED" | "DISALLOWED";
   acceptanceInput?: ProviderAcceptanceInput | null;
 };
@@ -243,6 +245,13 @@ export const providerStageResultSchemaFor = (
   stage: WorkflowStage,
   policy: ProviderStageResultPolicy = defaultStageResultPolicy,
 ): z.ZodType => {
+  if (policy.codeBlindCoordinator === true) {
+    if (stage !== "PLAN") throw new Error("A coordinator can only plan");
+    return resultEnvelope(
+      coordinatorPlanSchema,
+      "Bounded code-blind work orders for the economy implementation worker.",
+    );
+  }
   if (stage === "ACCEPTANCE" && policy.acceptanceInput !== undefined) {
     const ready = acceptanceReadySchemaFor(policy.acceptanceInput);
     return resultEnvelope(
@@ -279,6 +288,27 @@ export const decodeProviderStageResult = (
   candidate: unknown,
   policy: ProviderStageResultPolicy = defaultStageResultPolicy,
 ): DecodedProviderStageResult | null => {
+  if (policy.codeBlindCoordinator === true) {
+    if (stage !== "PLAN") return null;
+    const parsed = resultEnvelope(coordinatorPlanSchema, "Coordinator plan").safeParse(candidate);
+    if (!parsed.success) return null;
+    const checkpoint = checkpointDraftSchema.parse({
+      summary: "Code-blind coordinator work orders; workers must verify all technical assumptions.",
+      completed: [
+        "Bounded plan prepared. No repository inspection or implementation performed by the coordinator.",
+      ],
+      // Each durable checkpoint item is capped at 500 characters. Keep fields separate rather
+      // than JSON-escaping a whole order, which can exceed that cap for otherwise valid input.
+      remaining: parsed.data.result.orders.flatMap((order, index) => [
+        `Work order ${String(index)}: depends on ${order.dependsOn.join(", ") || "none"}; stop on ${order.stopCondition}.`,
+        `Outcome ${String(index)}: ${order.outcome}`,
+        `Verification ${String(index)}: ${order.verification}`,
+      ]),
+      deadEnds: [],
+      openQuestions: [],
+    });
+    return { outcome: { type: "COMPLETED", summary: checkpoint.summary }, checkpoint };
+  }
   switch (stage) {
     case "DISCOVERY":
     case "PLAN":

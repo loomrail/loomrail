@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { CheckpointDraft, ProviderUsage } from "@loomrail/contracts";
+import { serializeCoordinatorPacket } from "@loomrail/contracts";
 import type { ProviderInvocation, ProviderSessionListener } from "@loomrail/provider-core";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -80,6 +81,69 @@ const listener = (): ProviderSessionListener & {
 };
 
 describe("local Codex provider", () => {
+  it("starts the coordinator without tools, native agents, memory or search and exposes only its plan schema", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail-coordinator-cli-"));
+    temporaryDirectories.push(directory);
+    const recordPath = join(directory, "record.json");
+    const provider = createCodexProvider({
+      command: process.execPath,
+      commandArgsPrefix: [
+        fixture,
+        "--fixture-record",
+        recordPath,
+        "--fixture-output",
+        join(here, "fixtures", "coordinator-plan.synthetic.jsonl"),
+      ],
+    });
+    const base = invocation();
+    const coordinator = {
+      version: 1 as const,
+      ownerOutcome: "Make progress visible to the owner",
+      discovery: "UNKNOWN" as const,
+      unresolvedQuestions: 0,
+      attempt: 1,
+      sessionOrdinal: 1,
+    };
+    const sink = listener();
+    const outcome = await provider.start(
+      {
+        ...base,
+        coordinator,
+        session: { ...base.session, stage: "PLAN" },
+        modelTier: "DEEP",
+        modelId: "gpt-6-astra",
+        contextPack: { ...base.contextPack, text: serializeCoordinatorPacket(coordinator) },
+      },
+      sink,
+    );
+    expect(outcome.type).toBe("COMPLETED");
+    expect(sink.checkpoints[0]?.remaining).toContain("Outcome 0: Make task progress visible to the owner");
+    const record = JSON.parse(await readFile(recordPath, "utf8")) as {
+      args: string[];
+      cwd: string;
+      outputSchema: string;
+    };
+    expect(record.args).toEqual(
+      expect.arrayContaining([
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "agents.enabled=false",
+        "project_doc_max_bytes=0",
+        "skills.max_context_tokens=1",
+        'web_search="disabled"',
+        "multi_agent",
+        "memories",
+        "goals",
+        "gpt-6-astra",
+        "read-only",
+      ]),
+    );
+    expect(record.args.some((arg) => arg.startsWith("mcp_servers."))).toBe(false);
+    expect(record.outputSchema).toContain('"dependsOn"');
+    expect(record.outputSchema).not.toContain('"COMPLETED"');
+    expect(record.cwd).toContain("loomrail-codex-");
+  });
   it("uses the official CLI contract and honestly reports post-session token enforcement", () => {
     const provider = createCodexProvider({ command: process.execPath });
     expect(provider.capabilities()).toMatchObject({

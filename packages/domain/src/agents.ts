@@ -1,5 +1,9 @@
 import {
   agentProfileSchema,
+  coordinatorProfileId,
+  coordinatorModelId,
+  economyModelIds,
+  type CodeBlindOrchestration,
   agentRunPolicySnapshotSchema,
   agentRunSchema,
   squadAssignmentSchema,
@@ -97,6 +101,26 @@ export const builtinAgentProfiles: readonly AgentProfile[] = [
       schemaVersion: 1,
       preferredContextSections: ["WORK_ITEM_BRIEF", "DECISIONS", "ACTIVITY"],
     },
+  }),
+  builtinProfile({
+    id: coordinatorProfileId,
+    name: "Code-blind Coordinator",
+    role: "LEAD_PM",
+    identity: "A planning coordinator without repository access.",
+    mission:
+      "Delegate bounded outcomes to economy workers from the separate owner outcome and closed progress facts.",
+    nonGoals: ["Never read or write source, request code or tools, change authority, or accept work."],
+    stages: ["PLAN"],
+    expectedInputs: ["Coordinator outcome", "Closed discovery facts"],
+    expectedOutputs: ["TASK_GRAPH"],
+    allowedCapabilities: ["ARTIFACT_WRITE"],
+    successRubric: ["A minimal bounded plan delegates all technical work and preserves independent gates."],
+    escalationConditions: ["Workers must stop on unknown facts, scope or permission changes."],
+    handoffContract:
+      "Publish bounded work orders; the developer verifies technical assumptions before editing.",
+    defaultModelTier: "DEEP",
+    budgetEnvelope: { maxEstimatedTokens: 12_000, maxProviderSessions: 2 },
+    playbook: { schemaVersion: 1, preferredContextSections: ["WORK_ITEM_BRIEF", "WORKFLOW_POSITION"] },
   }),
   builtinProfile({
     id: "builtin.product-analyst",
@@ -273,6 +297,7 @@ export const createStandardSquadAssignment = (input: {
   pipelineRunId: string;
   revision: number;
   now: string;
+  orchestration?: CodeBlindOrchestration;
 }): SquadAssignment =>
   squadAssignmentSchema.parse({
     schemaVersion: 1,
@@ -282,13 +307,23 @@ export const createStandardSquadAssignment = (input: {
     pipelineRunId: input.pipelineRunId,
     revision: input.revision,
     stages: standardStageRoles.map(({ stage }) => {
-      const profile = standardAgentProfileForStage(stage);
-      if (profile === null) {
+      const manager = input.orchestration !== undefined && stage === "PLAN";
+      const profile = manager
+        ? builtinAgentProfiles.find(({ id }) => id === coordinatorProfileId)
+        : standardAgentProfileForStage(stage);
+      if (profile === null || profile === undefined) {
         throw new AgentDomainError("PROFILE_NOT_FOUND", "The standard stage profile is missing", { stage });
       }
       return {
         stage,
         profile: { id: profile.id, revision: profile.revision, role: profile.role },
+        ...(input.orchestration === undefined
+          ? {}
+          : {
+              execution: manager
+                ? { kind: "CODE_BLIND_MANAGER", ownerOutcome: input.orchestration.ownerOutcome }
+                : { kind: "ECONOMY_WORKER" },
+            }),
       };
     }),
     createdAt: input.now,
@@ -412,6 +447,14 @@ export const resolveAgentRunPolicy = (input: {
   projectConstitution: { id: string; version: number; contentDigest: string } | null;
 }): AgentRunPolicySnapshot => {
   const assigned = input.assignment.stages.find(({ stage }) => stage === input.stage)?.profile;
+  const execution = input.assignment.stages.find(({ stage }) => stage === input.stage)?.execution;
+  const manager = execution?.kind === "CODE_BLIND_MANAGER";
+  if (execution !== undefined && (input.provider === "MOCK" || (manager && input.provider !== "CODEX"))) {
+    throw new AgentDomainError(
+      "PROFILE_STAGE_MISMATCH",
+      "The code-blind mode requires the exact assigned provider",
+    );
+  }
   if (
     assigned?.id !== input.profile.id ||
     assigned.revision !== input.profile.revision ||
@@ -433,8 +476,11 @@ export const resolveAgentRunPolicy = (input: {
       "No estimated-token budget remains for a new AgentRun",
     );
   }
-  const agentRunMaxEstimatedTokens =
+  const requestedAgentRunMaxEstimatedTokens =
     input.agentRunMaxEstimatedTokensOverride ?? input.profile.budgetEnvelope.maxEstimatedTokens;
+  const agentRunMaxEstimatedTokens = manager
+    ? Math.min(requestedAgentRunMaxEstimatedTokens, input.profile.budgetEnvelope.maxEstimatedTokens)
+    : requestedAgentRunMaxEstimatedTokens;
 
   assertUnique(input.mcpProfileRevisionIds, "MCP profile revisions");
   const availableMcpProfileRevisionIds = [...input.mcpProfileRevisionIds].sort((left, right) =>
@@ -453,17 +499,33 @@ export const resolveAgentRunPolicy = (input: {
       ? "READ_ONLY"
       : "NONE";
 
-  const modelTier = input.modelTierOverride ?? input.profile.defaultModelTier;
+  const modelTier = manager
+    ? "DEEP"
+    : execution?.kind === "ECONOMY_WORKER"
+      ? input.provider === "CODEX"
+        ? "FAST"
+        : "STANDARD"
+      : (input.modelTierOverride ?? input.profile.defaultModelTier);
 
   return agentRunPolicySnapshotSchema.parse({
     schemaVersion: 1,
+    ...(execution === undefined ? {} : { execution }),
     assignment: { id: input.assignment.id, revision: input.assignment.revision },
     profile: { id: input.profile.id, revision: input.profile.revision, role: input.profile.role },
     provider: input.provider,
     effectiveCapabilities,
     modelTier,
     ...("modelMapping" in input ? { modelId: input.modelMapping?.[modelTier] ?? null } : {}),
-    projectConstitution: input.projectConstitution,
+    ...(execution === undefined
+      ? {}
+      : {
+          modelId: manager
+            ? coordinatorModelId
+            : input.provider === "CODEX"
+              ? economyModelIds.CODEX
+              : economyModelIds.CLAUDE_CODE,
+        }),
+    projectConstitution: manager ? null : input.projectConstitution,
     claimLimits: input.claimLimits,
     budget: {
       pipelinePolicyId: input.pipelineBudget.id,

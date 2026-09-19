@@ -5,6 +5,13 @@ import type { ReactNode } from "react";
 const LOCALE_STORAGE_KEY = "loomrail.locale";
 
 const en = {
+  "workflow.coordinator.enable": "Code-blind coordinator (experimental)",
+  "workflow.coordinator.description":
+    "Astra plans without code or tools; Luna / Sonnet do all repository work. Independent Review, QA and your acceptance remain required. Requires a compatible signed-in Codex CLI; no fallback. Fable is not yet qualified. Savings are not yet measured.",
+  "workflow.coordinator.outcome": "Product outcome for the coordinator",
+  "workflow.coordinator.outcomeDescription":
+    "Write a short product goal without code, paths or secrets. Only this text and closed progress facts reach Astra. The original task and detailed worker reports stay with the workers. Astra has a 12,000-token planning ceiling (post-session accounting).",
+  "workflow.coordinator.invalid": "Use 10–2,000 characters for the separate product outcome.",
   "settings.open": "Open settings",
   "settings.title": "Settings",
   "settings.description":
@@ -1405,6 +1412,13 @@ const en = {
 } as const;
 
 const ru = {
+  "workflow.coordinator.enable": "Координатор без доступа к коду (экспериментальный)",
+  "workflow.coordinator.description":
+    "Astra планирует без кода и инструментов; Luna / Sonnet работают с репозиторием. Независимые Review, QA и ваше принятие обязательны. Нужен совместимый Codex CLI с входом; подмены модели нет. Fable пока не проверен. Экономия ещё не измерена.",
+  "workflow.coordinator.outcome": "Продуктовая цель для координатора",
+  "workflow.coordinator.outcomeDescription":
+    "Кратко опишите результат без кода, путей и секретов. Astra получает только этот текст и ограниченные сведения о ходе работы. Исходная задача и подробные отчёты остаются у исполнителей. Лимит планирования Astra — 12 000 токенов с учётом после сессии.",
+  "workflow.coordinator.invalid": "Отдельная продуктовая цель должна содержать от 10 до 2000 символов.",
   "settings.open": "Открыть настройки",
   "settings.title": "Настройки",
   "settings.description":

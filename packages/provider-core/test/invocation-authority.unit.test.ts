@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
+import { serializeCoordinatorPacket } from "@loomrail/contracts";
 
 import {
   ProviderInvocationAuthorityError,
@@ -76,6 +77,38 @@ const invocation = (access?: "READ_ONLY" | "READ_WRITE"): ProviderInvocation => 
 };
 
 describe("provider invocation authority prompt", () => {
+  it("accepts only the exact code-blind packet and refuses every source-bearing authority channel", () => {
+    const base = invocation();
+    const coordinator = {
+      version: 1 as const,
+      ownerOutcome: "Make workflow progress visible",
+      discovery: "COMPLETED" as const,
+      unresolvedQuestions: 0,
+      attempt: 1,
+      sessionOrdinal: 1,
+    };
+    const manager: ProviderInvocation = {
+      ...base,
+      session: { ...base.session, stage: "PLAN" },
+      coordinator,
+      modelId: "gpt-6-astra",
+      modelTier: "DEEP",
+      contextPack: { ...base.contextPack, text: serializeCoordinatorPacket(coordinator) },
+    };
+    expect(renderProviderInvocationPrompt(manager)).toContain("Loomrail code-blind coordinator v1");
+    for (const candidate of [
+      { ...manager, modelId: "gpt-5.6-luna" },
+      { ...manager, modelTier: "FAST" as const },
+      { ...manager, session: { ...manager.session, stage: "IMPLEMENT" as const } },
+      { ...manager, contextPack: { ...manager.contextPack, text: "const SOURCE_CANARY = 42" } },
+      { ...manager, workspace: invocation("READ_ONLY").workspace },
+      { ...manager, mcpConnections: invocation("READ_ONLY").mcpConnections },
+      { ...manager, acceptanceInput: { criteria: ["SOURCE_CANARY"], evidence: [] } },
+    ])
+      expect(() => renderProviderInvocationPrompt(candidate as ProviderInvocation)).toThrow(
+        ProviderInvocationAuthorityError,
+      );
+  });
   it("keeps a stable policy prefix and the original context byte-for-byte when no workspace exists", () => {
     const input = invocation();
     const prompt = renderProviderInvocationPrompt(input);

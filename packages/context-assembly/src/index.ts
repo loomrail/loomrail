@@ -5,3 +5,4 @@ export type { AssembleInput, AssembleResult, ContextPackRecipeDraft } from "./as
 export { assembleContextPack } from "./assemble.js";
 
 export { stageContextTokenCaps } from "./policy.js";
+export { assembleCoordinatorPack } from "./coordinator.js";

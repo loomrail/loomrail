@@ -16,10 +16,10 @@ live dispatch и остальные L4b/L5 также остаются pending
 
 **Продукт:** Loomrail
 
-**Текущая работа:** [план 130](../plans/130-repository-release-readiness.ru.md) закрывает provider-selection
-regression, обновляет публичный статус и готовит объединённый patch после activity slices 126–129. Staged 0.1.2
-не опубликован и не содержит последних activity changes. Code-blind Astra/Fable coordinator исследуется для
-отдельной следующей задачи; новый режим и экономия пока не заявлены.
+**Текущая работа:** [план 133](../plans/133-code-blind-orchestrator.ru.md) реализует отдельно разрешённый
+владельцем code-blind PLAN coordinator: Astra без repository/tools/context code, Luna/Sonnet для code work.
+Opt-in и отдельная owner outcome сохраняются immutable; шесть gates не меняются. Fable, live qualification и
+измерение экономии ещё не выполнены. Изолированная разработка не меняет approved source выпуска 0.1.3 из плана 130.
 
 **Descriptor:** The local control plane for accountable AI software teams.
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { codeBlindOrchestrationSchema } from "./orchestration.js";
 
 import {
   actorSchema,
@@ -1169,6 +1170,7 @@ const commandBaseSchema = z
 
 const startPipelinePayloadSchema = z
   .object({
+    orchestration: codeBlindOrchestrationSchema.optional(),
     workItemId: opaqueIdSchema,
     expectedVersion: z.number().int().positive(),
     template: workflowTemplateSchema,
@@ -1937,6 +1939,7 @@ export const stageAttemptHardPausedResultSchema = z
 
 export const startPipelineRequestSchema = z
   .object({
+    orchestration: codeBlindOrchestrationSchema.optional(),
     schemaVersion: schemaVersionSchema,
     commandId: opaqueIdSchema,
     expectedVersion: z.number().int().positive(),
@@ -2001,6 +2004,7 @@ export const resolveAcceptanceRequestSchema = z
 
 export const workflowSnapshotSchema = z
   .object({
+    orchestration: codeBlindOrchestrationSchema.optional(),
     schemaVersion: schemaVersionSchema,
     run: pipelineRunSchema.nullable(),
     stageAttempts: z.array(stageAttemptSchema),

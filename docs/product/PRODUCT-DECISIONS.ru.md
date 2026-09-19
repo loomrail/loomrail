@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-09 — context handoff ждёт terminal MCP lease
+**Последнее дополнение:** 2026-09-19 — отдельный opt-in code-blind координатор (PD-034)
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -943,6 +943,16 @@ Release manifest хранит exact Stable version и exact support target. Unkn
 pending gate внутри target, caller-supplied tag или попытка заявить Windows при 9/11 блокируются. Trusted workflow,
 exact main SHA, six-job CI, protected Environment, OIDC stage-only publish и отдельное 2FA approval не меняются.
 Полный контракт — ADR-0032 и планы 120–121.
+
+### PD-034 — Включаемый code-blind координатор планирования
+
+**Дата:** 2026-09-19. Запрос владельца разрешает реализацию отдельного режима по ADR-0035 и плану 133.
+PLAN выполняет закреплённая Astra без repository/network/MCP и без исходников в context. Все чтения, изменения,
+technical discovery, независимый Review и QA выполняют Luna/Sonnet. Обычный режим и его model mappings не меняются.
+Владелец отдельно задаёт краткую продуктовую цель без кода; свободный текст из репозитория/worker reports,
+Constitution, Decisions, checkpoints, paths и diff менеджеру не передаётся. Только закрытые progress facts.
+Все шесть gates, budgets, transactional recovery и human Acceptance остаются domain-owned. Fable, платные
+qualification/benchmark sessions и расширение CLI/platform admission этим решением не разрешены.
 
 ## 14. Отложенные решения
 

@@ -1,7 +1,7 @@
 # Loomrail threat model
 
 **Status:** Phase 0 baseline
-**Updated:** 2026-09-12
+**Updated:** 2026-09-19
 **Review cadence:** every Phase and before public release
 
 ## 1. Scope
@@ -2569,3 +2569,22 @@ however old. The sweep is bounded — 1,000 rows per batch, at most 20 batches p
 Browser QA and Project verification output sweeps it sits beside — so a backlog larger than that drains over
 several restarts rather than delaying one, and a daemon that is never restarted never sweeps. Raw provider
 stdout/stderr, and any owner opt-in to capture it, remain out of scope and would need their own decision.
+
+### Code-blind coordinator delta (T88)
+
+**T88 — a planning manager regains source access through tools or context. Critical.** ADR-0035 requires a separate
+immutable PLAN profile with artifact-only capabilities, no workspace/network/MCP/Constitution, and a dedicated
+context projection. Do not run ordinary context rendering then redact it: never select source-bearing fields.
+Worker checkpoints, questions, paths, code, encoded payloads, logs, evidence prose and plugin responses are excluded.
+The owner supplies a separate bounded product outcome explicitly without code; intentional owner disclosure and a
+compromised same-user OS remain outside this guarantee. Numeric/enum worker facts cannot expand authority.
+
+The adapter refuses a manager invocation with any tool, workspace, wrong model/provider or unvalidated projection
+before spawn. Existing empty scratch, disabled built-ins/ambient config and exact CLI admission remain mandatory.
+Stage assignments pin manager and economy-worker model policy; global cost overrides cannot promote workers or
+change the manager identity. Typed work orders do not skip Review, measured verification/QA or human Acceptance.
+No automatic expensive fallback, Fable credit consumption, nested native agents or retry after uncertain execution.
+
+Required verification: code/secret canaries in excluded fields; malicious extra projection/report fields;
+forged capability/MCP/model policy; default-mode regression; bounded plan DAG and unknown references;
+transactional idempotency/restart and existing budget/gate coverage. Synthetic CLI tests are not live qualification.

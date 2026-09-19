@@ -43,3 +43,4 @@ record.
 
 - [ADR-0033 — Stage context and single-copy workspace tool results](0033-stage-context-and-single-copy-tool-results.md)
 - [ADR-0034 — Bounded diagnostic provider activity](0034-diagnostic-provider-activity.md)
+- [ADR-0035 — A code-blind planning coordinator](0035-code-blind-coordinator.md)

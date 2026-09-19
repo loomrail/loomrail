@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  coordinatorModelId,
+  coordinatorProfileId,
+  economyModelIds,
+  stageExecutionPolicySchema,
+} from "./orchestration.js";
 
 import { activityOriginSchema } from "./activity.js";
 import { providerModelIdSchema, providerPreferenceSchema } from "./provider-selection.js";
@@ -85,8 +91,18 @@ export const squadStageAssignmentSchema = z
   .object({
     stage: workflowStageSchema,
     profile: agentProfileRefSchema,
+    execution: stageExecutionPolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((assignment, context) => {
+    if (
+      (assignment.profile.id === coordinatorProfileId) !==
+        (assignment.execution?.kind === "CODE_BLIND_MANAGER") ||
+      (assignment.execution?.kind === "CODE_BLIND_MANAGER" && assignment.stage !== "PLAN")
+    ) {
+      context.addIssue({ code: "custom", message: "Coordinator profile and PLAN execution must match" });
+    }
+  });
 
 export const squadAssignmentSchema = z
   .object({
@@ -99,7 +115,23 @@ export const squadAssignmentSchema = z
     stages: z.array(squadStageAssignmentSchema).min(1).max(6),
     createdAt: utcTimestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((assignment, context) => {
+    if (!assignment.stages.some(({ execution }) => execution !== undefined)) return;
+    if (
+      assignment.stages.length !== 6 ||
+      new Set(assignment.stages.map(({ stage }) => stage)).size !== 6 ||
+      assignment.stages.some(
+        ({ stage, execution }) =>
+          execution?.kind !== (stage === "PLAN" ? "CODE_BLIND_MANAGER" : "ECONOMY_WORKER"),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Code-blind squads require exactly one manager and all five economy worker stages",
+      });
+    }
+  });
 
 export const agentRunStatusSchema = z.enum([
   "RUNNING",
@@ -130,6 +162,7 @@ export const agentRunWorkspacePolicySchema = z
 export const agentRunPolicySnapshotSchema = z
   .object({
     schemaVersion: schemaVersionSchema,
+    execution: stageExecutionPolicySchema.optional(),
     assignment: z.object({ id: opaqueIdSchema, revision: z.number().int().positive() }).strict(),
     profile: agentProfileRefSchema,
     provider: providerIdSchema,
@@ -163,6 +196,35 @@ export const agentRunPolicySnapshotSchema = z
   })
   .strict()
   .superRefine((snapshot, context) => {
+    const manager = snapshot.execution?.kind === "CODE_BLIND_MANAGER";
+    if (manager !== (snapshot.profile.id === coordinatorProfileId)) {
+      context.addIssue({ code: "custom", message: "Coordinator execution must match the immutable profile" });
+    }
+    if (
+      manager &&
+      (snapshot.provider !== "CODEX" ||
+        snapshot.modelId !== coordinatorModelId ||
+        snapshot.modelTier !== "DEEP" ||
+        snapshot.projectConstitution !== null ||
+        snapshot.effectiveCapabilities.length !== 1 ||
+        snapshot.effectiveCapabilities[0] !== "ARTIFACT_WRITE" ||
+        snapshot.workspace.access !== "NONE" ||
+        snapshot.workspace.networkAccess ||
+        snapshot.mcpProfileRevisionIds.length !== 0)
+    ) {
+      context.addIssue({ code: "custom", message: "Code-blind manager authority or model mismatch" });
+    }
+    if (manager && (snapshot.budget.maxEstimatedTokens > 12_000 || snapshot.budget.maxProviderSessions > 2)) {
+      context.addIssue({ code: "custom", message: "Coordinator budget cannot exceed its bounded profile" });
+    }
+    if (
+      snapshot.execution?.kind === "ECONOMY_WORKER" &&
+      (snapshot.provider === "MOCK" ||
+        snapshot.modelId !== economyModelIds[snapshot.provider] ||
+        snapshot.modelTier !== (snapshot.provider === "CODEX" ? "FAST" : "STANDARD"))
+    ) {
+      context.addIssue({ code: "custom", message: "Economy worker must use its exact provider model" });
+    }
     const capabilities = new Set(snapshot.effectiveCapabilities);
     if (capabilities.size !== snapshot.effectiveCapabilities.length) {
       context.addIssue({ code: "custom", message: "Effective capabilities must be unique" });

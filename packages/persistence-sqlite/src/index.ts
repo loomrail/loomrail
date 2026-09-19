@@ -5616,7 +5616,17 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         .map(recoveryReportFromRow);
       const artifacts = readEvidenceArtifacts(run.id);
       const acceptancePackage = readAcceptancePackageForRun(run.id);
+      const squadRow = selectLatestSquadAssignment.get(run.id);
+      const managerExecution =
+        squadRow === undefined
+          ? undefined
+          : squadAssignmentFromRow(squadRow).stages.find(({ stage }) => stage === "PLAN")?.execution;
       return workflowSnapshotSchema.parse({
+        ...(managerExecution?.kind === "CODE_BLIND_MANAGER"
+          ? {
+              orchestration: { mode: "CODE_BLIND", ownerOutcome: managerExecution.ownerOutcome },
+            }
+          : {}),
         schemaVersion: 1,
         run,
         stageAttempts,
@@ -10537,6 +10547,9 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           pipelineRunId: decision.run.id,
           revision: 1,
           now: occurredAt,
+          ...(command.payload.orchestration === undefined
+            ? {}
+            : { orchestration: command.payload.orchestration }),
         });
         insertSquadAssignment.run(
           assignment.id,
@@ -10860,7 +10873,11 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
           agentRun.version,
         );
 
-        if (existingWorkspace && stageRunsInWorkspace(stageAttempt.stage)) {
+        if (
+          existingWorkspace &&
+          policySnapshot.workspace.access !== "NONE" &&
+          stageRunsInWorkspace(stageAttempt.stage)
+        ) {
           if (existingWorkspace.status !== "READY") {
             throw new StateStoreError(
               "WORKSPACE_NOT_READY",

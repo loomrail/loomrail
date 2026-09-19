@@ -124,6 +124,7 @@ const resolveOptions = (options: CreateCodexProviderOptions): ResolvedOptions =>
 };
 
 const stagePolicy = (invocation: ProviderInvocation): ProviderStageResultPolicy => ({
+  codeBlindCoordinator: invocation.coordinator !== undefined,
   humanRequests: invocation.humanRequests,
   acceptanceInput: invocation.acceptanceInput,
 });
@@ -175,6 +176,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
       invocation: ProviderInvocation,
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
+      const prompt = renderProviderInvocationPrompt(invocation);
       const scratchDirectory = await mkdtemp(join(tmpdir(), "loomrail-codex-"));
       try {
         const schemaPath = join(scratchDirectory, "stage-result.schema.json");
@@ -222,6 +224,24 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           "--ephemeral",
           "--ignore-user-config",
           "--ignore-rules",
+          ...(invocation.coordinator === undefined && invocation.economyWorker !== true
+            ? []
+            : [
+                "-c",
+                "agents.enabled=false",
+                "-c",
+                "project_doc_max_bytes=0",
+                "-c",
+                "skills.max_context_tokens=1",
+                "-c",
+                'web_search="disabled"',
+                "--disable",
+                "multi_agent",
+                "--disable",
+                "memories",
+                "--disable",
+                "goals",
+              ]),
           ...codeModeArguments,
           ...DISABLED_BUILTIN_FEATURES.flatMap((feature) => ["--disable", feature]),
           "--model",
@@ -234,7 +254,7 @@ export const createCodexProvider = (options: CreateCodexProviderOptions = {}): P
           scratchDirectory,
           "--output-schema",
           schemaPath,
-          renderProviderInvocationPrompt(invocation),
+          prompt,
         ];
 
         let result: DecodedProviderStageResult | undefined;

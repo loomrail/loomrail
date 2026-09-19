@@ -79,6 +79,14 @@ const listener = (): ProviderSessionListener & {
 };
 
 describe("local Claude Code provider", () => {
+  it("refuses coordinator substitution before starting any CLI process", async () => {
+    const sink = listener();
+    const provider = createClaudeCodeProvider({ command: process.execPath });
+    await expect(provider.start({ ...invocation(), modelId: "gpt-6-astra" }, sink)).rejects.toMatchObject({
+      code: "COORDINATOR_AUTHORITY_MISMATCH",
+    });
+    expect(sink.pids).toEqual([]);
+  });
   it("uses the official CLI contract and honestly reports post-session token enforcement", () => {
     const provider = createClaudeCodeProvider({ command: process.execPath });
     expect(provider.capabilities()).toMatchObject({

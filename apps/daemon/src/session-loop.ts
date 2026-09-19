@@ -2,9 +2,14 @@ import { createHash } from "node:crypto";
 import { access, constants, mkdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import { assembleContextPack, stageContextTokenCaps } from "@loomrail/context-assembly";
+import {
+  assembleContextPack,
+  assembleCoordinatorPack,
+  stageContextTokenCaps,
+} from "@loomrail/context-assembly";
 import {
   checkpointDraftSchema,
+  coordinatorPacketSchema,
   contextPackRecipeInputSchema,
   contextWindowUsageSchema,
   maxCarriedPaths,
@@ -1283,6 +1288,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
     let provisionRefusal: HumanRequestDraft | null = null;
     if (
       lease.workspace === null &&
+      executionPolicy.snapshot.workspace.access !== "NONE" &&
       stageRunsInWorkspace(attempt.stage) &&
       (adapterWorksInWorkspace(capabilities.stages) || attempt.stage === "REVIEW")
     ) {
@@ -1453,13 +1459,43 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         ),
       ),
     );
-    const assembled = assembleContextPack({
-      sources: reviewContext.sources,
-      spec: contextSpec,
-      budgetTokens,
-      bytesPerToken: BYTES_PER_TOKEN,
-      projection: "STAGE_V1",
-    });
+    const coordinator =
+      executionPolicy.snapshot.execution?.kind === "CODE_BLIND_MANAGER"
+        ? coordinatorPacketSchema.parse({
+            version: 1,
+            ownerOutcome: executionPolicy.snapshot.execution.ownerOutcome,
+            discovery: contextSnapshot.sources.stageHandoff?.stage === "DISCOVERY" ? "COMPLETED" : "UNKNOWN",
+            unresolvedQuestions: Math.min(
+              20,
+              contextSnapshot.sources.stageHandoff?.checkpoint.openQuestions.length ?? 0,
+            ),
+            attempt: attempt.attempt,
+            sessionOrdinal,
+          })
+        : undefined;
+    const assembled =
+      coordinator !== undefined
+        ? assembleCoordinatorPack({
+            packet: coordinator,
+            agentRunId,
+            ...(contextSnapshot.sources.stageHandoff?.stage === "DISCOVERY"
+              ? {
+                  discoveryCheckpoint: {
+                    id: contextSnapshot.sources.stageHandoff.checkpoint.id,
+                    version: contextSnapshot.sources.stageHandoff.checkpoint.version,
+                  },
+                }
+              : {}),
+            budgetTokens: Math.min(2_000, budgetTokens),
+            bytesPerToken: BYTES_PER_TOKEN,
+          })
+        : assembleContextPack({
+            sources: reviewContext.sources,
+            spec: contextSpec,
+            budgetTokens,
+            bytesPerToken: BYTES_PER_TOKEN,
+            projection: "STAGE_V1",
+          });
 
     if (assembled.type === "SOURCE_LIMIT_EXCEEDED") {
       refuseDispatch({
@@ -2076,6 +2112,8 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
             dispatch: deps.dispatch,
             session: providerSessionRef(providerSession, attempt),
             contextPack: assembled.pack,
+            ...(coordinator === undefined ? {} : { coordinator }),
+            ...(executionPolicy.snapshot.execution?.kind === "ECONOMY_WORKER" ? { economyWorker: true } : {}),
             modelTier: executionPolicy.snapshot.modelTier,
             modelId: executionPolicy.snapshot.modelId ?? null,
             tokenBudget: providerTokenBudgetSchema.parse({

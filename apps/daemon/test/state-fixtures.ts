@@ -1,6 +1,11 @@
 import { join } from "node:path";
 
-import type { WorkflowDispatch, WorkflowSnapshot, WorkflowTemplate } from "@loomrail/contracts";
+import type {
+  CodeBlindOrchestration,
+  WorkflowDispatch,
+  WorkflowSnapshot,
+  WorkflowTemplate,
+} from "@loomrail/contracts";
 import type { LocalState } from "@loomrail/persistence-sqlite";
 import { deliveryTemplate } from "@loomrail/workflow-engine";
 
@@ -90,6 +95,7 @@ export const seedQueuedAttempt = (
   temporaryDirectory: string,
   projectId = FIXTURE_PROJECT_ID,
   template: WorkflowTemplate = deliveryTemplate,
+  orchestration?: CodeBlindOrchestration,
 ): SeededAttempt => {
   registerProject(localState, createCommandId, temporaryDirectory, projectId);
   const workItemId = seedReadyWorkItem(localState, createCommandId, projectId);
@@ -103,6 +109,7 @@ export const seedQueuedAttempt = (
       workItemId,
       expectedVersion: 2,
       template,
+      ...(orchestration === undefined ? {} : { orchestration }),
       budget: { maxEstimatedTokens: 100_000, warningThresholds: [0.5, 0.8, 0.95] },
     },
   });

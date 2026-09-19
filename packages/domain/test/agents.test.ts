@@ -50,8 +50,8 @@ const implementationPolicy = () => {
 
 describe("agent team domain", () => {
   it("ships a unique complete roster and assigns every provider-executed stage", () => {
-    expect(builtinAgentProfiles).toHaveLength(7);
-    expect(new Set(builtinAgentProfiles.map(({ id }) => id)).size).toBe(7);
+    expect(builtinAgentProfiles).toHaveLength(8);
+    expect(new Set(builtinAgentProfiles.map(({ id }) => id)).size).toBe(8);
     expect(new Set(builtinAgentProfiles.map(({ role }) => role)).size).toBe(7);
 
     const squad = assignment();
