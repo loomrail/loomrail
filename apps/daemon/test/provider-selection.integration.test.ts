@@ -2,20 +2,38 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { providerCapabilitiesResponseSchema, type ProviderCapabilitiesResponse } from "@loomrail/contracts";
+import {
+  providerCapabilitiesResponseSchema,
+  type ProviderCapabilitiesResponse,
+  type ProviderId,
+} from "@loomrail/contracts";
+import { createCodexProvider } from "@loomrail/provider-codex";
+import { createClaudeCodeProvider } from "@loomrail/provider-claude-code";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon, type RunningDaemon } from "../src/server.js";
-import { LOOMRAIL_PROVIDER_ENV_VAR } from "../src/provider-selection.js";
+import { createProviderRegistry, LOOMRAIL_PROVIDER_ENV_VAR } from "../src/provider-selection.js";
 import { authenticate, bootstrapToken } from "./daemon-fixtures.js";
 
-// The unit tests for `resolveDefaultProviderAdapter` (provider-selection.unit.test.ts) prove the
-// selection function itself is correct in isolation. They do not prove `startDaemon` actually
-// reads the real process environment when nothing overrides its default -- every other daemon test
-// injects `providerAdapter` directly, which bypasses `resolveDefaultProviderAdapter` entirely. This
-// file is the other half: no `providerAdapter` override anywhere below, so whatever
-// `/api/v1/provider/capabilities` reports came from `process.env[LOOMRAIL_PROVIDER_ENV_VAR]` through
-// the same default-resolution branch a real `loomrail` launch takes.
+// Keep real environment parsing, registry selection and adapter capability declarations. Only
+// machine observations are injected: installed/logged-in CLIs on a contributor's computer must
+// not decide the expected result, and this suite must never start a provider session.
+const registryFor = (readyProviders: readonly ProviderId[]) => {
+  const neverStart = () => Promise.reject(new Error("Selection tests must not dispatch a provider"));
+  return createProviderRegistry({
+    adapters: {
+      CODEX: { ...createCodexProvider({ command: process.execPath }), start: neverStart },
+      CLAUDE_CODE: { ...createClaudeCodeProvider({ command: process.execPath }), start: neverStart },
+    },
+    probeRuntime: (provider) =>
+      Promise.resolve(
+        readyProviders.includes(provider)
+          ? { installed: true, compatibility: "VERIFIED", version: "test-runtime" }
+          : { installed: false, compatibility: "MISSING", version: null },
+      ),
+    probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+  });
+};
 describe("provider selection at daemon startup", () => {
   const temporaryDirectories: string[] = [];
   const originalValue = process.env[LOOMRAIL_PROVIDER_ENV_VAR];
@@ -30,6 +48,7 @@ describe("provider selection at daemon startup", () => {
 
   const bootWithEnv = async (
     value: string | undefined,
+    readyProviders: readonly ProviderId[] = [],
   ): Promise<{ daemon: RunningDaemon; token: string }> => {
     if (value === undefined) Reflect.deleteProperty(process.env, LOOMRAIL_PROVIDER_ENV_VAR);
     else process.env[LOOMRAIL_PROVIDER_ENV_VAR] = value;
@@ -40,6 +59,7 @@ describe("provider selection at daemon startup", () => {
       bootstrapToken: token,
       stateDatabasePath: join(temporaryDirectory, "state.sqlite"),
       logger: false,
+      providerRegistry: registryFor(readyProviders),
     });
     return { daemon, token };
   };
@@ -74,6 +94,7 @@ describe("provider selection at daemon startup", () => {
     const daemon = await startDaemon({
       bootstrapToken: bootstrapToken(),
       stateDatabasePath: join(temporaryDirectory, "state.sqlite"),
+      providerRegistry: registryFor([]),
       loggerStream: {
         write: (message: string) => {
           written += message;
@@ -115,10 +136,34 @@ describe("provider selection at daemon startup", () => {
     }
   });
 
-  it("boots with the fail-closed local Codex adapter when the variable is unset", async () => {
+  it("boots fail-closed when the variable is unset and neither CLI is ready", async () => {
     const { daemon, token } = await bootWithEnv(undefined);
     try {
-      expect(await readReportedProvider(daemon, token)).toBe("CODEX");
+      expect(await readCapabilities(daemon, token)).toMatchObject({ provider: "CODEX", start: false });
+      expect(daemon.provider.providerReady).toBe(false);
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it.each([
+    { ready: ["CLAUDE_CODE"] as const, expected: "CLAUDE_CODE" },
+    { ready: ["CODEX"] as const, expected: "CODEX" },
+    { ready: ["CODEX", "CLAUDE_CODE"] as const, expected: "CODEX" },
+  ])("AUTO selects $expected from the ready local runtimes $ready", async ({ ready, expected }) => {
+    const { daemon, token } = await bootWithEnv(undefined, ready);
+    try {
+      expect(await readCapabilities(daemon, token)).toMatchObject({ provider: expected, start: true });
+      expect(daemon.provider).toMatchObject({ provider: expected, providerReady: true });
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it("does not replace an explicitly selected unavailable Codex with ready Claude", async () => {
+    const { daemon, token } = await bootWithEnv("CODEX", ["CLAUDE_CODE"]);
+    try {
+      expect(await readCapabilities(daemon, token)).toMatchObject({ provider: "CODEX", start: false });
     } finally {
       await daemon.close();
     }
@@ -144,9 +189,7 @@ describe("provider selection at daemon startup", () => {
       // Q20 gives the local CLI only the daemon-owned bounded executor, so IMPLEMENT and QA can
       // be declared without handing provider output arbitrary local authority.
       expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
-      // Whether a local login is ready on the machine running this test is not the point; that the
-      // endpoint carries the claim at all is.
-      expect(typeof capabilities.start).toBe("boolean");
+      expect(capabilities.start).toBe(false);
       // Codex does not expose a normalized monetary cost report to the cockpit.
       expect(capabilities.costReporting).toBe(false);
       // The same stage list the launcher prints. `formatStartupReport` is tested on hand-built
@@ -172,7 +215,7 @@ describe("provider selection at daemon startup", () => {
       // this integration test asserts the public capability surface without making a paid call.
       expect(capabilities.stages).toEqual(["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"]);
       expect(capabilities.costReporting).toBe(true);
-      expect(typeof capabilities.start).toBe("boolean");
+      expect(capabilities.start).toBe(false);
     } finally {
       await daemon.close();
     }
@@ -181,10 +224,18 @@ describe("provider selection at daemon startup", () => {
   // The property that matters most: a typo must not stop the daemon from starting at all. Booting
   // successfully and reporting the blocked OpenAI adapter, rather than throwing during
   // `startDaemon`, is the assertion.
-  it("boots fail-closed on local Codex, not synthetic work, for an unrecognised value", async () => {
-    const { daemon, token } = await bootWithEnv("codex-typo");
+  it.each([
+    { ready: [] },
+    { ready: ["CODEX"] },
+    { ready: ["CLAUDE_CODE"] },
+    { ready: ["CODEX", "CLAUDE_CODE"] },
+  ] satisfies {
+    ready: ProviderId[];
+  }[])("blocks an invalid override even with ready runtimes $ready", async ({ ready }) => {
+    const { daemon, token } = await bootWithEnv("codex-typo", ready);
     try {
-      expect(await readReportedProvider(daemon, token)).toBe("CODEX");
+      expect(await readCapabilities(daemon, token)).toMatchObject({ provider: "CODEX", start: false });
+      expect(daemon.provider).toMatchObject({ providerReady: false, recognised: false });
     } finally {
       await daemon.close();
     }

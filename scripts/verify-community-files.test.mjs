@@ -87,3 +87,22 @@ test("refuses a dated roadmap commitment", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("refuses a roadmap that omits the live-provider support boundary", async () => {
+  const root = await copiedCommunityTree();
+  try {
+    const path = join(root, "ROADMAP.md");
+    const roadmap = await readFile(path, "utf8");
+    await writeFile(
+      path,
+      roadmap.replace(
+        "Windows and Linux live-provider execution remain unsupported",
+        "All platforms supported",
+      ),
+      "utf8",
+    );
+    await assert.rejects(verifyCommunityFiles(root), /must retain the Stable support boundary/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

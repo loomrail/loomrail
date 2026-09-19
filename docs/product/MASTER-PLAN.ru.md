@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-12 — macOS arm64 Stable 0.1.1 published and public dogfood accepted
+**Последнее дополнение:** 2026-09-19 — repository readiness и кандидат 0.1.3; опубликованным остаётся 0.1.1
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
@@ -15,6 +15,11 @@ live-provider execution остаётся unsupported/pending и fail closed. Rec
 live dispatch и остальные L4b/L5 также остаются pending
 
 **Продукт:** Loomrail
+
+**Текущая работа:** [план 130](../plans/130-repository-release-readiness.ru.md) закрывает provider-selection
+regression, обновляет публичный статус и готовит объединённый patch после activity slices 126–129. Staged 0.1.2
+не опубликован и не содержит последних activity changes. Code-blind Astra/Fable coordinator исследуется для
+отдельной следующей задачи; новый режим и экономия пока не заявлены.
 
 **Descriptor:** The local control plane for accountable AI software teams.
 

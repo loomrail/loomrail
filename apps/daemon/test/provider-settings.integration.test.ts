@@ -10,6 +10,7 @@ import {
   type WorkflowStage,
 } from "@loomrail/contracts";
 import { providerCapabilitiesSchema, type ProviderAdapter } from "@loomrail/provider-core";
+import { decideDispatchStage } from "@loomrail/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createProviderRegistry } from "../src/provider-selection.js";
@@ -90,7 +91,12 @@ describe("real provider settings API", () => {
   });
 
   it("fails closed when neither local provider runtime is ready", async () => {
-    const registry = createProviderRegistry({ env: {} });
+    const registry = createProviderRegistry({
+      env: {},
+      adapters: { CODEX: inertAdapter("CODEX"), CLAUDE_CODE: inertAdapter("CLAUDE_CODE") },
+      probeRuntime: () => Promise.resolve({ installed: false, compatibility: "MISSING", version: null }),
+      probeAuthentication: () => Promise.resolve("UNKNOWN"),
+    });
     await registry.refresh();
     const resolution = registry.resolve(project());
 
@@ -98,6 +104,43 @@ describe("real provider settings API", () => {
     expect(resolution.response.providers.every(({ ready }) => !ready)).toBe(true);
     expect(resolution.response.fallbackReason).toBe("NO_READY_LIVE_PROVIDER");
     expect(resolution.adapter.capabilities().start).toBe(false);
+  });
+
+  it("an invalid environment override blocks every stage without falsifying runtime observations", async () => {
+    const registry = createProviderRegistry({
+      env: { LOOMRAIL_PROVIDER: "codex-typo" },
+      adapters: { CODEX: inertAdapter("CODEX"), CLAUDE_CODE: inertAdapter("CLAUDE_CODE") },
+      probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+      probeRuntime: () => Promise.resolve({ installed: true, compatibility: "VERIFIED", version: "1.0.0" }),
+    });
+    await registry.refresh();
+    for (const stage of stages) {
+      const resolution = registry.resolve(
+        { ...project(), providerPreference: "CLAUDE_CODE" },
+        {
+          stage,
+          avoidProvider: "CODEX",
+        },
+      );
+      expect(resolution.response).toMatchObject({
+        effectiveProvider: "CODEX",
+        source: "ENVIRONMENT_OVERRIDE",
+        environmentOverrideInvalid: true,
+        environmentOverrideLocked: true,
+      });
+      expect(resolution.response.providers.every(({ ready }) => ready)).toBe(true);
+      const capabilities = resolution.adapter.capabilities();
+      expect(capabilities.start).toBe(false);
+      expect(
+        decideDispatchStage({
+          stage,
+          provider: capabilities.provider,
+          declaredStages: capabilities.stages,
+          canStart: capabilities.start,
+          tokenBudgetEnforcement: capabilities.tokenBudgetEnforcement,
+        }).type,
+      ).toBe("STAGE_NOT_SERVED");
+    }
   });
 
   it("persists an explicit Anthropic choice through the authenticated API", async () => {

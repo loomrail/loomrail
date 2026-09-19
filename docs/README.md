@@ -33,6 +33,7 @@ currently a runnable acceptance route.
 - [Release procedure](RELEASE.md)
 - [Supply-chain policy](security/SUPPLY-CHAIN.md) · [Supply-chain policy (RU)](security/SUPPLY-CHAIN.ru.md)
 - [Current Stable notes](releases/0.1.1.md)
+- [Next candidate — not published](releases/0.1.3.md)
 - [Public Beta history](releases/0.1.0-beta.1.md)
 
 Files under [`plans/`](plans/) are versioned implementation records. They explain why a slice was built and how it

@@ -148,15 +148,24 @@ const verifyTemplateConfig = (text) => {
 
 const verifyRoadmap = (text) => {
   for (const heading of [
-    "## Now — prove the first stable local delivery loop",
+    "## Shipped — the macOS Stable local delivery loop",
+    "## Now — maintain the proven local delivery loop",
     "## Next — connect the proven loop to normal repository delivery",
     "## Later — broaden collaboration after local trust is earned",
-    "## Not planned before stable",
+    "## Outside the current approved scope",
     "## How priorities change",
   ]) {
     assert(text.includes(heading), `ROADMAP.md is missing ${heading}`);
   }
   assert(text.includes("not a schedule"), "ROADMAP.md must disclaim calendar authority");
+  assert(
+    text.includes("Windows and Linux live-provider execution remain unsupported"),
+    "ROADMAP.md must retain the Stable support boundary",
+  );
+  assert(
+    !text.includes("public pre-alpha software"),
+    "ROADMAP.md must not mislabel the shipped Stable release",
+  );
   assert(text.includes(issueChooserUrl), "ROADMAP.md is missing the structured issue chooser");
   assert(text.includes("private reporting route"), "ROADMAP.md is missing the private security route");
   assert(

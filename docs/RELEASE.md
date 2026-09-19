@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.2` verified and staged for macOS Apple Silicon; public `latest` remains `0.1.1` until separate npm WebAuthn approval
-**Updated:** 2026-09-12
+**Status:** `0.1.3` locally verified for macOS Apple Silicon; clean-source CI and publication pending. Public `latest` remains `0.1.1`; the older `0.1.2` stage is not a published release.
+**Updated:** 2026-09-19
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -70,6 +70,7 @@ launches the installed binary on a free loopback port with an isolated `LOOMRAIL
 - `loomrail start --no-open` starts the loopback daemon and prints an authenticated one-time URL without requiring a
   provider call;
 - the daemon reports `/health/ready`;
+- the authenticated installed runtime reports the same product version as the package manifest;
 - the installed launcher serves the built Workbench shell, not just the API;
 - the launcher prints the one-time sign-in URL, so a headless install can authenticate;
 - `loomrail doctor --json` inspects the isolated installation without creating state or leaking its path;
@@ -200,15 +201,21 @@ evidence, so Windows dispatch and a future Windows-inclusive support target rema
 
 ### Current candidate
 
-`0.1.2` is the owner-authorized token-efficiency patch candidate for `MACOS_ARM64`. It preserves all six stages,
+`0.1.3` is the repository-readiness patch candidate for `MACOS_ARM64`. It preserves all six stages,
 independent Review, measured verification and Browser QA, final owner Acceptance, audit, permissions and recovery.
 The implementation reduces duplicate workspace result delivery and optional context, adds bounded stage context
 and structured upstream checkpoints, and shows cache attribution with honest unknowns. Modeled byte reductions
-are not provider-token savings claims. See the [candidate notes](releases/0.1.2.md) and
+are not provider-token savings claims. It also includes the task-wide diagnostic activity feed and corrects invalid
+environment-override admission. See the [candidate notes](releases/0.1.3.md) and
 [token-efficiency evidence](evidence/phase-8/TOKEN-EFFICIENCY-EVIDENCE.md).
 
-Publishing remains gated on the completed additional live dogfood, exact-source local/CI/package checks,
-protected-environment review and separate npm approval. The historical compatibility rows stay unchanged.
+Publishing remains gated on exact-source local/CI/package checks, protected-environment review and separate npm
+approval. The historical compatibility rows stay unchanged. No new CLI version is admitted by this patch.
+The separately staged `0.1.2` contains older bytes; its [historical receipt](evidence/phase-8/STABLE-0.1.2-CANDIDATE.json)
+must not be reused for `0.1.3` or presented as verification of the newer source.
+Before finishing a new publication, inspect the owner's npm staging queue and explicitly resolve the obsolete
+`0.1.2` candidate. Approving it after the newer release could move `latest` backwards. Do not reject or approve a
+stage merely from this historical record; verify its exact identity and use the owner's separate npm approval.
 
 ### Current published Stable release
 

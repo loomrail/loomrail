@@ -1576,12 +1576,16 @@ provider while the owner believes the chosen one ran.
 - daemon owns a stable adapter registry. The worker captures the exact adapter serving the live ProviderSession, so
   a concurrent Settings change cannot redirect abort/handoff;
 - `LOOMRAIL_PROVIDER` override is reported to UI and disables mutation rather than secretly defeating the selector;
+- an unknown override denies session admission for every stage even when both CLIs are ready; the blocked adapter
+  projection does not overwrite the separate observed installation/authentication facts or permit AUTO fallback;
 - no probe or selector adds a permission-bypass argument. A launched provider receives only the bounded local-CLI
   adapter environment and session-scoped Loomrail MCP authority, not ambient repository/plugin configuration.
 
 Verification: domain tests cover no-op and version conflict; persistence covers atomic replay and restart;
 daemon integration covers probe output canaries, missing/auth-required states, AUTO and environment precedence, and
 adapter capture across a concurrent preference change; browser E2E covers RU/EN, keyboard and both themes.
+The startup/provider-settings regression matrix uses deterministic probes: neither/one/both ready runtimes,
+explicit unavailable provider, and invalid override across all stages, Project preference and avoid-provider hints.
 
 ### MCP Connections delta (T27–T31)
 
