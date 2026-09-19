@@ -1,28 +1,34 @@
 # Loomrail public roadmap
 
-Loomrail is public pre-alpha software. This roadmap describes the current order of outcomes; it is not a schedule,
+Loomrail Stable is available for macOS Apple Silicon. Windows and Linux live-provider execution remain unsupported
+and fail closed. This roadmap describes the current order of outcomes; it is not a schedule,
 support promise, or substitute for the versioned [product decisions](docs/product/PRODUCT-DECISIONS.ru.md) and
 [master plan](docs/product/MASTER-PLAN.ru.md). Completed engineering detail lives in release notes and historical
 implementation plans.
 
-## Now — prove the first stable local delivery loop
+## Shipped — the macOS Stable local delivery loop
 
-- Close every macOS and Windows release gate without bypassing protected source checks.
+- Local authenticated Codex/Claude CLI execution, independent Review, measured Project verification and Browser QA,
+  durable restart recovery, budgets, criterion-linked Acceptance and final owner approval.
+- One canonical safe install route and guided mission. Setup is read-only; explicitly starting model work consumes
+  provider quota. Provider allowance is separate from Loomrail budgets; unsupported reporting remains unavailable.
+- Private multi-task dogfood, package integrity/provenance and clean install/backup/restore evidence for the declared
+  support target. See the [release record](docs/RELEASE.md) for published versions versus pending candidates.
+
+## Now — maintain the proven local delivery loop
+
+- Keep source, diagnostics, public documentation and the next package candidate consistent; every release still
+  requires exact-source macOS/Windows source/browser/package checks and separate owner publication approval.
 - Admit exact live Codex and Claude Code CLI versions only after separately authorized, quota-bearing compatibility
   evidence; keep unknown versions fail-closed.
-- Replace divergent install copy with one canonical safe entry route and a zero-quota guided mission built from the
-  existing setup checks, bundled Task recipes, measured QA, and owner Acceptance Package.
-- Show structured Codex/Claude allowance windows with an explicit remaining percentage, reset time, and freshness,
-  kept separate from Loomrail's authoritative task/project budgets.
-- Promote owner-approved build/test/lint/integration/E2E recipes to snapshot-bound evidence; required failed, errored,
-  or stale checks block Acceptance and never grant merge/deploy authority.
-- Complete one private dogfood epic across discovery, planning, implementation, independent review, measured Browser
-  QA, restart recovery, bounded budget, criterion-linked acceptance, and owner approval.
-- Preserve the completed final review's zero-P0/P1 boundary and produce trusted registry provenance before any stable
-  publication.
+- Preserve all verification, recovery and security gates while measuring context/worker overhead. Fewer prompt bytes
+  or cheaper model calls alone do not prove fewer total tokens or unchanged quality.
 
 ## Next — connect the proven loop to normal repository delivery
 
+- Evaluate an opt-in strong planner with no code access and bounded Luna/Sonnet workers. This is a
+  [researched proposal](docs/research/code-blind-orchestrator-primary-sources.ru.md), not a shipped mode or a measured
+  token-saving claim; implementation needs its own product decision, security boundary and quality evaluation.
 - Prove one owner-approved, one-shot GitHub Actions Guided Deploy against an exact clean Release, then require an
   environment-bound successful Preview before Production while keeping deployment secrets and operational procedure
   inside repository-owned workflows.
@@ -42,7 +48,7 @@ implementation plans.
 - Remote or cloud coordination with an explicit encryption, identity, retention, and audit model.
 - Delivery workflows outside software engineering only after the software loop proves sustained retention.
 
-## Not planned before stable
+## Outside the current approved scope
 
 - Automatic merge, push, deployment, retry/rollback, provider login, permission bypass, or silent dependency
   installation. A separately approved one-shot Guided Deploy is not automatic deployment.

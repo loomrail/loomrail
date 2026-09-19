@@ -200,8 +200,16 @@ export const createProviderRegistry = (
         availability[right].stages.length - availability[left].stages.length ||
         LIVE_PROVIDER_IDS.indexOf(left) - LIVE_PROVIDER_IDS.indexOf(right),
     );
-    const effectiveProvider: LiveProviderId = preferred ?? eligible[0] ?? "CODEX";
-    const effectiveAvailability = availability[effectiveProvider];
+    // An unknown override is a configuration error, never an instruction to try AUTO. Preserve
+    // the observed CLI readiness below, but deny session admission through the same capability
+    // the domain dispatch gate checks for every stage.
+    const effectiveProvider: LiveProviderId = environment.invalid
+      ? "CODEX"
+      : (preferred ?? eligible[0] ?? "CODEX");
+    const observedAvailability = availability[effectiveProvider];
+    const effectiveAvailability = environment.invalid
+      ? { ...observedAvailability, ready: false }
+      : observedAvailability;
     const fallbackReason =
       preferred === null && eligible.length === 0
         ? "NO_READY_LIVE_PROVIDER"

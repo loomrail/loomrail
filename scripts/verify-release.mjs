@@ -340,6 +340,24 @@ const run = async () => {
       throw new Error(`the launcher did not print its exact one-time sign-in URL:\n${output}`);
     }
 
+    // A correct package.json and receipt do not prove that the bundled launcher contains the
+    // same product version. Check the installed runtime through its real authenticated API;
+    // keep the ephemeral bootstrap/cookie in memory and out of errors and evidence.
+    const bootstrapToken = /#bootstrap=([A-Za-z0-9_-]+)/.exec(output)?.[1];
+    if (bootstrapToken === undefined) throw new Error("the packaged bootstrap URL is unreadable");
+    const exchange = await fetch(`${baseUrl}/api/session/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: baseUrl },
+      body: JSON.stringify({ bootstrapToken }),
+    });
+    const cookie = exchange.headers.get("set-cookie")?.split(";", 1)[0];
+    if (!exchange.ok || !cookie) throw new Error("the packaged launcher could not authenticate");
+    const statusResponse = await fetch(`${baseUrl}/api/v1/status`, { headers: { cookie } });
+    const status = await statusResponse.json();
+    if (!statusResponse.ok || status.daemon?.version !== version) {
+      throw new Error("the packaged runtime version does not match the release manifest");
+    }
+
     const activeExport = spawnSync(process.execPath, [binaryPath, "logs", "export"], {
       cwd: installDirectory,
       env: diagnosticEnvironment,
@@ -387,7 +405,7 @@ const run = async () => {
     }
 
     process.stdout.write(
-      `Release check passed: samples, setup, local CLI diagnostics, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
+      `Release check passed: samples, setup, local CLI diagnostics, runtime version, receipt, installed files and log lifecycle match; ${tarball} runs from a clean install.\n`,
     );
   } finally {
     launcher?.kill("SIGTERM");
