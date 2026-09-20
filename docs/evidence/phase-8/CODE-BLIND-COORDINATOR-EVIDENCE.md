@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-19. **Scope:** experimental feature from approved base
 `868be0ee9c2054cefeffda1ecc516c62ec2f8099`, separate from the 0.1.3 release.
-This is not release provenance or a live-provider admission row.
+This is not release provenance. The final section records the later, separately approved exact live execution
+admission; earlier smoke and failed attempts are retained as historical evidence and did not authorize it.
 
 ## Deterministic and browser checks
 
@@ -63,8 +64,9 @@ output is already included in output tokens, so neither is added again.
 The product prompt and Structured Output descriptions now state explicitly that read-only Discovery is intentional,
 that future file changes belong to Implement, and that `NEEDS_HUMAN` must never request tools, permissions or
 authority for a later stage. Unit tests lock both the runtime prompt and provider-visible schema guidance. The
-attempt remains negative evidence, not a compatibility admission: no write tool ran, no six-stage completion or
-restart continuation was demonstrated, and the exact installed CLI version remains unadmitted.
+attempt remains negative evidence and did not authorize compatibility admission: no write tool ran, no six-stage
+completion or restart continuation was demonstrated, and the exact installed CLI version remained unadmitted at
+this point.
 
 After this fix, provider-core passed 90/90 tests and the complete `pnpm verify` suite passed with Vitest workers
 serialized through its supported environment setting. The default parallel browser run had first hit one bounded
@@ -126,14 +128,19 @@ After recording this evidence, the complete serialized `pnpm verify` passed agai
 lint, typecheck and all workspace tests, including provider-core 90/90, Codex adapter 58/58, Browser QA 37/37,
 MCP gateway 28/28, persistence 213/213, daemon 370/370 and CLI 33/33.
 
-## Remaining release gates
+## Separate compatibility admission, 2026-09-20
 
-- The new installed Codex version is still **not admitted** by Loomrail; existing exact admission rows are unchanged.
-- Promoting this exact CLI/runtime identity still requires the owner's separate admission confirmation. The native
-  workspace/MCP allow-deny, six-stage workflow and restart qualification itself is now complete.
+- After the successful qualification, the owner separately confirmed execution admission for exact Codex CLI
+  `0.155.0-alpha.9.2 / darwin / arm64`. The runtime matrix and fail-closed tests were updated only for that identity.
+- Codex allowance reporting for this version remains unverified and unadmitted. No support is inherited by a
+  neighboring version, another architecture, Windows or Linux.
 - Fable and Sonnet were not exercised; Fable is unavailable in this first slice.
 - No measured non-inferiority or full-task savings claim is made.
 - The new mode is not part of published npm 0.1.3 and must not ship through that release identity.
+
+After the admission change, focused Codex tests passed 60/60 and combined Codex/Claude compatibility diagnostics
+passed 19/19. The complete serialized `pnpm verify` passed formatting, public readiness, lint, typecheck and every
+workspace suite on the admitted macOS arm64 host. The same exact-target test stays fail closed on Windows CI.
 
 ## Independent implementation review, 2026-09-20
 
@@ -169,7 +176,8 @@ receipt at the feature parent commit, not CLEAN release provenance, and the arch
 Final `pnpm verify` passed for this follow-up: formatting, public readiness, lint, typecheck and the complete
 workspace test suite. Final independent review counts: Standards 0 open findings; Spec 0 open findings.
 No additional native model calls or admission changes were made during review remediation. The later bounded native
-qualification attempt is recorded separately above and does not promote compatibility.
+qualification and still later separate owner admission decision are recorded above; no new provider call was needed
+for the promotion.
 
 The controls follow the official [subagents reference](https://learn.chatgpt.com/docs/agent-configuration/subagents),
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and

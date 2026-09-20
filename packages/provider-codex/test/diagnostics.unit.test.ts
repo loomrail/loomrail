@@ -89,9 +89,13 @@ describe("Codex provider diagnostics", () => {
       compatibility: "UNVERIFIED",
       version: "0.151.0-alpha.7.2",
     });
+    expect(codexProviderDiagnostics.classifyVersion("codex-cli 0.155.0-alpha.9.3\n")).toEqual({
+      compatibility: "UNVERIFIED",
+      version: "0.155.0-alpha.9.3",
+    });
   });
 
-  it.each(["0.153.0-alpha.5", "0.153.4", "0.154.0-alpha.6.2"])(
+  it.each(["0.153.0-alpha.5", "0.153.4", "0.154.0-alpha.6.2", "0.155.0-alpha.9.2"])(
     "verifies recorded version %s only on its exact macOS arm64 target",
     (version) => {
       expect(codexProviderDiagnostics.classifyVersion(`codex-cli ${version}\n`)).toEqual({
@@ -100,6 +104,15 @@ describe("Codex provider diagnostics", () => {
       });
     },
   );
+
+  it("does not infer allowance reporting from the new execution admission", () => {
+    expect(
+      codexRateLimitReportingTargetVerified("0.155.0-alpha.9.2", {
+        platform: "darwin",
+        architecture: "arm64",
+      }),
+    ).toBe(false);
+  });
 
   it("rejects unknown shapes without returning their raw path or error text", () => {
     const canary = "/private/owner/provider-version-canary";

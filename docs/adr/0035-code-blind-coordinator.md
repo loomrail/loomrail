@@ -1,6 +1,6 @@
 # ADR-0035 — A code-blind planning coordinator
 
-**Status:** Accepted for implementation; live qualification passed; compatibility admission pending
+**Status:** Accepted; live qualification passed; exact macOS arm64 execution target admitted
 
 **Date:** 2026-09-19
 
@@ -21,8 +21,10 @@ independent Review, measured QA, recovery and final human Acceptance. No nested 
 
 The first coordinator is explicitly pinned to CODEX / gpt-6-astra. Every other stage uses Luna or Sonnet according
 to its selected provider, independently of global tier overrides. No alias or model fallback is allowed. Fable
-remains unavailable until its billing and fallback behavior is separately authorized and qualified. Existing exact
-runtime admission remains unchanged; this implementation is not evidence for new CLI versions or platforms.
+remains unavailable until its billing and fallback behavior is separately authorized and qualified. Implementation
+alone does not change runtime admission. After the complete native qualification and a separate owner decision,
+PD-035 admits only Codex CLI `0.155.0-alpha.9.2 / darwin / arm64` for execution. No allowance-reporting, adjacent
+version, architecture or platform support is inferred.
 
 One manager at the planning milestone avoids per-tool coordination overhead. It sacrifices technical detail in
 the manager context to enforce source isolation; missing facts must stay unknown and workers must verify the plan.

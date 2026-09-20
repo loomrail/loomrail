@@ -1,7 +1,7 @@
 # Loomrail — зафиксированные продуктовые и архитектурные решения
 
 **Дата фиксации:** 2026-08-22
-**Последнее дополнение:** 2026-09-19 — отдельный opt-in code-blind координатор (PD-034)
+**Последнее дополнение:** 2026-09-20 — exact admission Codex CLI 0.155.0-alpha.9.2 на macOS arm64 (PD-035)
 **Статус:** approved baseline
 **Основание:** последовательный product/architecture grilling с владельцем проекта
 
@@ -953,6 +953,18 @@ technical discovery, независимый Review и QA выполняют Luna
 Constitution, Decisions, checkpoints, paths и diff менеджеру не передаётся. Только закрытые progress facts.
 Все шесть gates, budgets, transactional recovery и human Acceptance остаются domain-owned. Fable, платные
 qualification/benchmark sessions и расширение CLI/platform admission этим решением не разрешены.
+
+### PD-035 — Exact admission Codex CLI 0.155.0-alpha.9.2 на macOS arm64
+
+**Дата:** 2026-09-20. Отдельное подтверждение владельца после завершённой native qualification разрешает только
+execution admission exact target `0.155.0-alpha.9.2 / darwin / arm64`. Основание — production Codex adapter,
+workspace/MCP allow-deny, все шесть domain-owned стадий, fail-closed semantic rejection и bounded resume, restart
+после Plan, independent Review, measured QA и human Acceptance в одном durable workflow. Очищенное evidence хранит
+точный расход нового прогона 132385 input-plus-output токенов; сырые runtime-артефакты остаются вне Git.
+
+Допуск не наследуется через SemVer и не распространяется на другую CLI version, architecture, Windows/Linux,
+Claude Code, Fable/Sonnet или Codex allowance reporting. Он не меняет опубликованный npm `0.1.3`, не разрешает
+публикацию/merge и не является обещанием качества или стоимости. Остальные неизвестные target продолжают fail closed.
 
 ## 14. Отложенные решения
 

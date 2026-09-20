@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-22
 
-**Последнее дополнение:** 2026-09-19 — repository readiness и кандидат 0.1.3; опубликованным остаётся 0.1.1
+**Последнее дополнение:** 2026-09-20 — exact Codex 0.155.0-alpha.9.2 macOS arm64 execution admission
 
 **Статус:** approved product direction; active Mock и direct provider APIs удалены; production использует только
 локально установленные и авторизованные Codex/Claude CLI через bounded Loomrail tools; focused macOS runtime dogfood,
@@ -18,8 +18,10 @@ live dispatch и остальные L4b/L5 также остаются pending
 
 **Текущая работа:** [план 133](../plans/133-code-blind-orchestrator.ru.md) реализует отдельно разрешённый
 владельцем code-blind PLAN coordinator: Astra без repository/tools/context code, Luna/Sonnet для code work.
-Opt-in и отдельная owner outcome сохраняются immutable; шесть gates не меняются. Fable, live qualification и
-измерение экономии ещё не выполнены. Изолированная разработка не меняет approved source выпуска 0.1.3 из плана 130.
+Opt-in и отдельная owner outcome сохраняются immutable; шесть gates не меняются. Native qualification завершена,
+и PD-035 отдельно допустил exact Codex `0.155.0-alpha.9.2 / darwin / arm64` только для execution. Fable, allowance
+reporting и измерение экономии не квалифицированы. Изолированная разработка не меняет approved source выпуска 0.1.3
+из плана 130.
 
 **Descriptor:** The local control plane for accountable AI software teams.
 
@@ -1955,6 +1957,11 @@ human waiver с documented risk.
    patch прошёл тот же Stable release gate без semver-наследования. Опубликованный `0.1.1` затем завершил полный
    Recurkit workflow через `DONE / SUCCEEDED / ACCEPTED`; четыре required Project checks, шесть measured Browser QA
    executions и controlled restart подтвердили terminal durability без replay.
+8. Code-blind slice 133 завершил отдельный production Astra→Luna workflow на exact Codex
+   `0.155.0-alpha.9.2 / darwin / arm64`: все шесть стадий, workspace/MCP allow-deny, fail-closed semantic rejection,
+   bounded resume, restart после Plan, independent Review, measured QA и HUMAN Acceptance. После отдельного owner
+   confirmation PD-035 допустил только этот execution target. Allowance reporting, соседние версии, Windows/Linux,
+   Fable/Sonnet и quality/cost claim не наследуют admission; опубликованный 0.1.3 этот новый режим не содержит.
 
 ## 27. Primary-source anchors
 

@@ -7,9 +7,9 @@ Loomrail запускает один из двух официальных лок
 
 ## Текущая матрица
 
-Живое выполнение Stable проверено только на `darwin/arm64`: Codex CLI `0.153.4` и `0.154.0-alpha.6.2`, а также
-Claude Code CLI `2.1.260`. Каждое значение — точный допущенный target, а не semver range. Windows и Linux rows не
-проверены, поэтому provider dispatch на них fail closed.
+Живое выполнение Stable проверено только на `darwin/arm64`: Codex CLI `0.153.4`, `0.154.0-alpha.6.2` и
+`0.155.0-alpha.9.2`, а также Claude Code CLI `2.1.260`. Каждое значение — точный допущенный target, а не semver
+range. Windows и Linux rows не проверены, поэтому provider dispatch на них fail closed.
 
 | Выбор в UI      | Внутренний ID | Чей login   | Обязательная безопасная поверхность              | Стадии    |
 | --------------- | ------------- | ----------- | ------------------------------------------------ | --------- |
@@ -57,9 +57,12 @@ CLI-ход может превысить token estimate; UI говорит об 
 workspace-операции, idempotency, restart recovery, selection и persistence покрыты real-CLI recordings, test-only
 CLI fixtures и локальными integration tests. Codex `0.154.0-alpha.6.2` дополнительно прошёл production workflow из
 шести стадий с аудируемым изменением в IMPLEMENT, обязательной Project check, measured Browser QA, восстановлением
-после restart и owner Acceptance на одном tree. Автоматические тесты не вызывают платный API. Для непроверенной
-комбинации OS/версии совместимость остаётся fail-closed. Windows source, browser и clean-install CI зелёный, но это
-не live-provider evidence и не расширяет Stable support target.
+после restart и owner Acceptance на одном tree. Codex `0.155.0-alpha.9.2` прошёл отдельный code-blind Astra→Luna
+workflow из шести стадий с workspace/MCP allow-deny, semantic rejection и bounded resume, restart после Plan,
+independent Review, measured QA и owner Acceptance. Последующий отдельный owner-approved admission относится только
+к execution; allowance reporting этой версии остаётся unverified. Автоматические тесты не вызывают платный API.
+Для непроверенной комбинации OS/версии совместимость остаётся fail-closed. Windows source, browser и clean-install
+CI зелёный, но это не live-provider evidence и не расширяет Stable support target.
 
 Исторические API- и старые CLI-матрицы сохранены в датированных планах и evidence как audit record. Они не описывают
 активную runtime-границу.

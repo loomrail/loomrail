@@ -2294,6 +2294,13 @@ finite verification Run корректно исключал `SERVE`, но Accept
 Acceptance связывать один и тот же набор; `SERVE` остаётся только supervised launch authority. Это доказательство не
 переносится на allowance reporting, Windows, Linux или соседнюю CLI version.
 
+Qualification 2026-09-20 закрыла следующий отдельный execution target Codex
+`0.155.0-alpha.9.2 / darwin / arm64`. Production adapter и durable code-blind workflow доказали read-only
+Discovery/Review, write authority только в Implement, отсутствие workspace/MCP у Astra и Acceptance, semantic Plan
+rejection без checkpoint, owner-mediated bounded resume, restart после Plan, measured QA и HUMAN Acceptance. Только
+после этого владелец отдельным решением PD-035 подтвердил exact execution admission. Allowance reporting, соседние
+версии, другая architecture и Windows/Linux из этого evidence не наследуются и продолжают fail closed.
+
 ### Filesystem, shell and Git
 
 - canonical workspace allowlist;
