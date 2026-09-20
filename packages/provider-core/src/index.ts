@@ -332,7 +332,7 @@ const requireWorkspaceTool = (
  */
 const stageExecutionGuidance: Record<ProviderInvocation["session"]["stage"], string> = {
   DISCOVERY:
-    "Discovery: inspect the brief and relevant repository facts; identify scope and contradictions. Do not perform implementation or verification recipes.",
+    "Discovery: inspect the brief and relevant repository facts; identify scope and contradictions. Do not perform implementation or verification recipes. Read-only authority is intentional: a task that later requires file changes is not blocked here, because Loomrail grants write authority only to the later IMPLEMENT stage. Never ask the owner to grant tools, permissions or write authority.",
   PLAN: "Plan: build on the Discovery handoff; specify bounded files, changes and verification for the approved criteria. Inspect only unresolved facts. Do not perform verification recipes.",
   IMPLEMENT:
     "Implement: follow the durable Plan and Decisions, make bounded changes, and inspect relevant failures. Invoke only explicitly exposed recipe tools; Loomrail still runs the mandatory Project verification gate independently.",

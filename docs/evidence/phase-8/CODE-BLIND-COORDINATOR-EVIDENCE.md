@@ -38,10 +38,45 @@ The CLI was invoked with each exact requested model ID. The consumed stream does
 the service's executed model identity. The probes prove parser/schema completion for these invocations,
 not a new compatibility promise.
 
+## Owner-authorized native qualification attempt, 2026-09-20
+
+The owner authorized up to 50000 additional input-plus-output tokens for a real Astra-to-Luna,
+workspace/MCP, six-stage and restart qualification, with Sonnet excluded. A disposable repository and SQLite
+database were created outside Git. The intended restart seam was after a successful Plan; admission remained
+unchanged and the published package was not used.
+
+The attempt stopped in Discovery and did not reach Astra, Plan or workspace mutation:
+
+| Session | Requested model | Input tokens | Cached input | Output tokens | Reasoning output | Durable result |
+| ------: | --------------- | -----------: | -----------: | ------------: | ---------------: | -------------- |
+|       1 | gpt-5.6-luna    |        30510 |        20736 |           637 |              293 | NEEDS_HUMAN    |
+|       2 | gpt-5.6-luna    |        20936 |        11776 |           699 |              372 | INTERRUPTED    |
+
+The first session consumed 31147 tokens and incorrectly treated the later implementation's need to create a file
+as a current Discovery permission blocker, even though Discovery had the intended read-only workspace and
+Implement would receive separate write authority. The harness resolved the provider's recommended option and
+started one continuation. Because Codex reports usage only after a session, that continuation raised the observed
+cumulative total to 52782 tokens: 2782 above the authorized ceiling. This was a qualification-harness scheduling
+error; no further provider invocation was made. Cached input is already included in input tokens and reasoning
+output is already included in output tokens, so neither is added again.
+
+The product prompt and Structured Output descriptions now state explicitly that read-only Discovery is intentional,
+that future file changes belong to Implement, and that `NEEDS_HUMAN` must never request tools, permissions or
+authority for a later stage. Unit tests lock both the runtime prompt and provider-visible schema guidance. The
+attempt remains negative evidence, not a compatibility admission: no write tool ran, no six-stage completion or
+restart continuation was demonstrated, and the exact installed CLI version remains unadmitted.
+
+After this fix, provider-core passed 90/90 tests and the complete `pnpm verify` suite passed with Vitest workers
+serialized through its supported environment setting. The default parallel browser run had first hit one bounded
+client-side navigation timeout under heavy host load; the isolated scenario, the serialized browser package (37/37)
+and the complete serialized workspace run all passed without changing product timeouts.
+
 ## Remaining release gates
 
 - The new installed Codex version is still **not admitted** by Loomrail; existing exact admission rows are unchanged.
-- Full native workspace/MCP allow-deny, six-stage workflow and recovery qualification are still required.
+- A fresh, separately authorized native workspace/MCP allow-deny, six-stage workflow and recovery qualification is
+  still required after the Discovery authority fix. Any future harness must reserve a complete worst-observed
+  session before dispatch because usage enforcement is post-session.
 - Fable and Sonnet were not exercised; Fable is unavailable in this first slice.
 - No measured non-inferiority or full-task savings claim is made.
 - The new mode is not part of published npm 0.1.3 and must not ship through that release identity.
@@ -79,8 +114,8 @@ startup and log lifecycle; its consumer audit found no known vulnerabilities. Th
 receipt at the feature parent commit, not CLEAN release provenance, and the archive was not published.
 Final `pnpm verify` passed for this follow-up: formatting, public readiness, lint, typecheck and the complete
 workspace test suite. Final independent review counts: Standards 0 open findings; Spec 0 open findings.
-No additional native model calls or admission changes
-were made during review remediation; the three historical smoke calls above remain the complete live evidence.
+No additional native model calls or admission changes were made during review remediation. The later bounded native
+qualification attempt is recorded separately above and does not promote compatibility.
 
 The controls follow the official [subagents reference](https://learn.chatgpt.com/docs/agent-configuration/subagents),
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and

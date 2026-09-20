@@ -128,6 +128,19 @@ describe("provider invocation authority prompt", () => {
     expect(changed.split("Changed task data")[0]).toBe(prompt.slice(0, -input.contextPack.text.length));
   });
 
+  it("tells read-only Discovery to leave later write authority to Implement", () => {
+    const base = invocation("READ_ONLY");
+    const input: ProviderInvocation = {
+      ...base,
+      session: { ...base.session, stage: "DISCOVERY" },
+    };
+
+    const prompt = renderProviderInvocationPrompt(input);
+    expect(prompt).toContain("Read-only authority is intentional");
+    expect(prompt).toContain("Loomrail grants write authority only to the later IMPLEMENT stage");
+    expect(prompt).toContain("Never ask the owner to grant tools, permissions or write authority");
+  });
+
   it("renders bounded indexed Acceptance vocabulary as explicitly untrusted prompt data", () => {
     const input: ProviderInvocation = {
       ...invocation(),

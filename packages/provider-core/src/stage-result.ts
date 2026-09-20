@@ -18,7 +18,7 @@ const needsHumanSchema = z
   })
   .strict()
   .describe(
-    "Use this result only when missing owner information makes a correct non-human result impossible and the answer cannot be inferred from recorded Decisions. The request must pose one concrete answerable question. Never use this result for a progress update, intention, inspection status, summary, or announcement. If no owner input is needed, this result is invalid; use the normal stage result. Never ask for permission to proceed, for a stage handoff, for approval of a plan or implementation, for confirmation of an existing Decision, or for acceptance. Loomrail owns stage transitions and the acceptance gate. Work autonomously. Do not return until the current stage is complete or a required owner answer is genuinely missing.",
+    "Use this result only when missing owner information makes a correct non-human result impossible and the answer cannot be inferred from recorded Decisions. The request must pose one concrete answerable question. Never use this result for a progress update, intention, inspection status, summary, or announcement. If no owner input is needed, this result is invalid; use the normal stage result. Never ask for permission to proceed, for a stage handoff, for approval of a plan or implementation, for confirmation of an existing Decision, or for acceptance. Never request tools, permissions, workspace write authority, or authority needed by a later stage: session authority is immutable, and Loomrail grants each later stage its own bounded authority. A future implementation requirement is not a blocker for a read-only Discovery or Plan stage. Loomrail owns stage transitions and the acceptance gate. Work autonomously. Do not return until the current stage is complete or a required owner answer is genuinely missing.",
   );
 
 const ordinaryCompletionSchema = checkpointDraftSchema.extend({ type: z.literal("COMPLETED") }).strict();
@@ -184,7 +184,7 @@ const resultEnvelope = <T extends z.ZodType>(result: T, description: string) =>
 
 const ordinaryStageResults = {
   DISCOVERY: ordinaryCompletionSchema.describe(
-    "Investigate the work item and repository, resolve bounded unknowns, and report what remains.",
+    "Investigate the work item and repository, resolve bounded unknowns, and report what remains. Discovery is read-only by design and must complete without asking for write authority even when the later implementation will create or change files.",
   ),
   PLAN: ordinaryCompletionSchema.describe(
     "Produce a bounded implementation plan that follows the repository constraints and acceptance criteria.",
