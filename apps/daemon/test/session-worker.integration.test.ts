@@ -481,10 +481,30 @@ describe("session worker", () => {
     expect(settled).toBe(true);
   }, 20_000);
 
-  it.each([false, true])(
-    "drives a CODEX-shaped real-repository route to the owner acceptance gate (coordinator=%s)",
-    async (codeBlind) => {
-      const localState = state();
+  it.each([
+    { codeBlind: false, questionCount: 0 },
+    { codeBlind: true, questionCount: 2 },
+    { codeBlind: true, questionCount: 50 },
+  ])(
+    "drives a CODEX-shaped real-repository route to the owner acceptance gate (%j)",
+    async ({ codeBlind, questionCount }) => {
+      const backingState = state();
+      const coordinatorQueries: string[] = [];
+      const localState: LocalState = {
+        ...backingState,
+        query: (query) => {
+          if (query.type === "READ_COORDINATOR_CONTEXT") coordinatorQueries.push(query.stageAttemptId);
+          if (codeBlind && query.type === "READ_CONTEXT_SOURCES") {
+            const runs = backingState.query({ type: "LIST_AGENT_RUNS" });
+            if (runs.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+            const run = runs.runs.find(({ stageAttemptId }) => stageAttemptId === query.stageAttemptId);
+            if (run?.policySnapshot?.execution?.kind === "CODE_BLIND_MANAGER") {
+              throw new Error("A coordinator must never load source-bearing context");
+            }
+          }
+          return backingState.query(query);
+        },
+      };
       await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
       const seenStages: ProviderInvocation["session"]["stage"][] = [];
       const seenHumanRequestPolicies: ProviderInvocation["humanRequests"][] = [];
@@ -545,13 +565,38 @@ describe("session worker", () => {
             expect(invocation.contextPack.text).not.toContain("durable handoff canary");
             expect(invocation.contextPack.text).not.toContain("Choose the compatibility target");
             expect(invocation.contextPack.text).not.toContain("Carry a stage attempt");
+            expect(invocation.contextPack.text).not.toContain("SOURCE_CANARY");
             expect(renderProviderInvocationPrompt(invocation)).toContain(
               "Loomrail code-blind coordinator v1",
             );
             expect(invocation.coordinator).toMatchObject({
               discovery: "COMPLETED",
+              unresolvedQuestions: Math.min(20, questionCount),
               ownerOutcome: "Deliver the approved outcome with independent checks.",
             });
+            const facts = localState.query({
+              type: "READ_COORDINATOR_CONTEXT",
+              stageAttemptId: invocation.session.stageAttemptId,
+            });
+            expect(facts).toEqual({
+              type: "COORDINATOR_CONTEXT",
+              discoveryCheckpoint: { id: expect.any(String) as unknown, version: 1 },
+              unresolvedQuestions: Math.min(20, questionCount),
+            });
+            const discoveryAttempt = snapshotOf(
+              localState,
+              invocation.dispatch.workItemId,
+            ).stageAttempts.find(({ stage }) => stage === "DISCOVERY");
+            if (!discoveryAttempt) throw new Error("Expected Discovery");
+            const history = localState.query({
+              type: "LIST_PROVIDER_SESSIONS",
+              stageAttemptId: discoveryAttempt.id,
+            });
+            if (history.type !== "PROVIDER_SESSIONS") throw new Error("Expected Discovery history");
+            expect(facts).toMatchObject({ discoveryCheckpoint: { id: history.checkpoints.at(-1)?.id } });
+            expect(() =>
+              localState.query({ type: "READ_COORDINATOR_CONTEXT", stageAttemptId: discoveryAttempt.id }),
+            ).toThrow();
             const workspace = localState.query({
               type: "GET_WORKSPACE_BY_WORK_ITEM",
               workItemId: invocation.dispatch.workItemId,
@@ -673,7 +718,10 @@ describe("session worker", () => {
               completed: ["Read relevant files"],
               remaining: ["Next stage"],
               deadEnds: [],
-              openQuestions: [],
+              openQuestions: Array.from(
+                { length: questionCount },
+                (_, index) => `SOURCE_CANARY question ${String(index)}`,
+              ),
             });
           }
           return {
@@ -762,6 +810,7 @@ describe("session worker", () => {
 
       const completed = snapshotOf(localState, seeded.workItemId);
       expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"]);
+      expect(coordinatorQueries.length).toBe(codeBlind ? 3 : 0);
       expect(seenHumanRequestPolicies).toEqual([
         "ALLOWED",
         "DISALLOWED",
@@ -796,6 +845,29 @@ describe("session worker", () => {
       expect(acceptanceModelTier).toBe(codeBlind ? "FAST" : "STANDARD");
       expect(acceptanceAgentRunId).toMatch(/^agentRun-/u);
       expect(acceptanceWorkspaceLeaseHolder).toBeNull();
+      if (codeBlind) {
+        const plan = deliveryTemplate.stages.find(({ stage }) => stage === "PLAN");
+        if (!plan) throw new Error("Expected PLAN");
+        const unrelated = seedQueuedAttemptFixture(
+          localState,
+          createCommandId,
+          temporaryDirectory,
+          "project-web",
+          {
+            ...deliveryTemplate,
+            id: "unrelated-coordinator-plan",
+            stages: [{ ...plan, ordinal: 0 }],
+          },
+          { mode: "CODE_BLIND", ownerOutcome: "A separate owner-approved outcome." },
+        );
+        expect(
+          localState.query({ type: "READ_COORDINATOR_CONTEXT", stageAttemptId: unrelated.stageAttemptId }),
+        ).toEqual({
+          type: "COORDINATOR_CONTEXT",
+          discoveryCheckpoint: null,
+          unresolvedQuestions: 0,
+        });
+      }
 
       const acceptanceAttempt = completed.stageAttempts.find(({ stage }) => stage === "ACCEPTANCE");
       if (acceptanceAttempt === undefined || acceptanceAgentRunId === undefined) {

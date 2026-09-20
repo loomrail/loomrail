@@ -44,7 +44,43 @@ not a new compatibility promise.
 - Full native workspace/MCP allow-deny, six-stage workflow and recovery qualification are still required.
 - Fable and Sonnet were not exercised; Fable is unavailable in this first slice.
 - No measured non-inferiority or full-task savings claim is made.
-- The new mode is not part of approved npm candidate 0.1.3 and must not ship through that candidate.
+- The new mode is not part of published npm 0.1.3 and must not ship through that release identity.
+
+## Independent implementation review, 2026-09-20
+
+Reviewed the feature against base `868be0ee9c2054cefeffda1ecc516c62ec2f8099`, plan 133, PD-034, ADR-0035 and T88.
+Two independent review axes were kept separate:
+
+### Standards
+
+The initial review found a structural context-boundary violation and duplicated model IDs. Follow-up found broad
+bookkeeping reads still inside the session loop. All were corrected: coordinator facts and operational counters
+have narrow validated SQLite queries, the loop does not load workflow/checkpoint/recipe/activity prose, and economy
+model identities use the shared contract. Final re-review found no remaining violations or justified code smells.
+The guarantee concerns coordinator session preparation/execution, not the entire domain-owned daemon process.
+
+### Spec
+
+The initial review found ordinary Astra mappings being rejected without opt-in and ordinary source context being
+loaded before coordinator projection. Both were corrected. Re-review checked same-run Discovery provenance, capped
+counts, immutable continuation, session accounting and the unchanged one-human-gate semantics, with no remaining
+confirmed specification findings. Native qualification and a cost/quality benchmark remain separate gates.
+
+The regression test for ordinary Astra failed before the fix and passed afterwards. Targeted tests also cover
+the closed query, count 2 and 50 capped to 20, cross-pipeline isolation, absent Discovery, exact checkpoint identity,
+wrong-stage rejection and restart. A direct manager session-loop guard forbids all four prior broad queries and
+checks handoff, database reopen, session ordinals 1/2, preserved usage of 110 synthetic tokens and absence of a
+checkpoint text canary. The existing ordinary six-stage route is retained.
+
+The repeated full browser suite passed 69/69; the isolated crash-recovery drill passed with one interrupted run,
+no replay and one durable report. Compatibility diagnostics passed 17/17 without changing exact admission rows.
+The updated feature-local package passed clean installation, receipt/file checks, samples, setup, diagnostics,
+startup and log lifecycle; its consumer audit found no known vulnerabilities. This was a DIRTY development
+receipt at the feature parent commit, not CLEAN release provenance, and the archive was not published.
+Final `pnpm verify` passed for this follow-up: formatting, public readiness, lint, typecheck and the complete
+workspace test suite. Final independent review counts: Standards 0 open findings; Spec 0 open findings.
+No additional native model calls or admission changes
+were made during review remediation; the three historical smoke calls above remain the complete live evidence.
 
 The controls follow the official [subagents reference](https://learn.chatgpt.com/docs/agent-configuration/subagents),
 [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and

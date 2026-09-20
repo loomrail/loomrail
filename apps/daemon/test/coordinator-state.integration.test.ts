@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { seedQueuedAttempt, snapshotOf } from "./state-fixtures.js";
 import { readAgentSchedulingSnapshot } from "../src/agent-scheduling.js";
 import { gatedAdapter } from "./gated-adapter.js";
+import { runStageAttempt } from "../src/session-loop.js";
+import { renderProviderInvocationPrompt, type ProviderAdapter } from "@loomrail/provider-core";
 
 describe("coordinator durable assignment", () => {
   it("commits once, restores the exact policy after reopen and refuses provider substitution", async () => {
@@ -57,8 +59,20 @@ describe("coordinator durable assignment", () => {
         type: "GET_SQUAD_ASSIGNMENT",
         pipelineRunId: seeded.dispatch.pipelineRunId,
       });
+      const factsQuery = {
+        type: "READ_COORDINATOR_CONTEXT" as const,
+        stageAttemptId: seeded.dispatch.stageAttemptId,
+      };
+      const facts = first.query(factsQuery);
+      expect(facts).toEqual({
+        type: "COORDINATOR_CONTEXT",
+        discoveryCheckpoint: null,
+        unresolvedQuestions: 0,
+      });
+      expect(() => first.query({ ...factsQuery, stageAttemptId: "missing-attempt" })).toThrow();
       first.close();
       state = await open();
+      expect(state.query(factsQuery)).toEqual(facts);
       expect(
         state.query({ type: "GET_SQUAD_ASSIGNMENT", pipelineRunId: seeded.dispatch.pipelineRunId }),
       ).toEqual(assignment);
@@ -122,6 +136,84 @@ describe("coordinator durable assignment", () => {
           }),
         ],
       });
+      const sessionOrdinals: number[] = [];
+      const recordedUsage: number[] = [];
+      const baseAdapter = gatedAdapter(128_000);
+      const adapter: ProviderAdapter = {
+        ...baseAdapter,
+        capabilities: () => ({ ...baseAdapter.capabilities(), usageReporting: true }),
+        start: (invocation, listener) => {
+          sessionOrdinals.push(invocation.session.ordinal);
+          recordedUsage.push(invocation.tokenBudget.recordedEstimatedTokens);
+          expect(invocation.coordinator).toMatchObject({
+            discovery: "UNKNOWN",
+            unresolvedQuestions: 0,
+            sessionOrdinal: invocation.session.ordinal,
+          });
+          expect(renderProviderInvocationPrompt(invocation)).not.toContain("CHECKPOINT_SOURCE_CANARY");
+          expect(invocation.workspace).toBeUndefined();
+          expect(invocation.mcpConnections).toEqual([]);
+          listener.onUsage({
+            inputTokens: 100,
+            outputTokens: 10,
+            quality: "ACTUAL",
+          });
+          if (invocation.session.ordinal === 1) {
+            return Promise.resolve({
+              type: "HANDED_OFF",
+              checkpoint: {
+                summary: "CHECKPOINT_SOURCE_CANARY",
+                completed: [],
+                remaining: ["Continue planning"],
+                deadEnds: [],
+                openQuestions: [],
+              },
+            });
+          }
+          return Promise.resolve({ type: "COMPLETED", summary: "The bounded plan is complete." });
+        },
+      };
+      const runWithoutSourceReads = async (current: LocalState, stopBetweenSessions: boolean) => {
+        const authority = new AbortController();
+        const guarded: LocalState = {
+          ...current,
+          query: (query) => {
+            if (
+              [
+                "READ_CONTEXT_SOURCES",
+                "GET_WORKFLOW_SNAPSHOT",
+                "LIST_PROVIDER_SESSIONS",
+                "LIST_AGENT_RUN_ACTIVITY",
+              ].includes(query.type)
+            ) {
+              throw new Error(`Coordinator session loop attempted source-bearing query ${query.type}`);
+            }
+            return current.query(query);
+          },
+        };
+        await runStageAttempt({
+          state: guarded,
+          adapter,
+          dispatch: seeded.dispatch,
+          template,
+          workspacesRoot: join(directory, "unused-workspaces"),
+          createCommandId: commandId,
+          correlationId: "coordinator-isolated-continuation",
+          authoritySignal: authority.signal,
+          onSessionLive: (sessionId) => {
+            if (sessionId === null && stopBetweenSessions) authority.abort();
+          },
+          logger: { info: () => undefined, warn: () => undefined },
+        });
+      };
+      await runWithoutSourceReads(state, true);
+      expect(sessionOrdinals).toEqual([1]);
+      state.close();
+      state = await open();
+      await runWithoutSourceReads(state, false);
+      expect(sessionOrdinals).toEqual([1, 2]);
+      expect(recordedUsage).toEqual([0, 110]);
+      expect(snapshotOf(state, seeded.workItemId).stageAttempts[0]?.status).toBe("SUCCEEDED");
     } finally {
       state?.close();
       await rm(directory, { recursive: true, force: true });

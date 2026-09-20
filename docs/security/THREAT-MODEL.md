@@ -2588,3 +2588,10 @@ No automatic expensive fallback, Fable credit consumption, nested native agents 
 Required verification: code/secret canaries in excluded fields; malicious extra projection/report fields;
 forged capability/MCP/model policy; default-mode regression; bounded plan DAG and unknown references;
 transactional idempotency/restart and existing budget/gate coverage. Synthetic CLI tests are not live qualification.
+
+The coordinator session loop uses `READ_COORDINATOR_CONTEXT` for same-run successful Discovery provenance and a
+bounded question count. `READ_SESSION_LOOP_STATE` selects operational attempt metadata and scalar gate/session/
+usage/activity counters, never full workflow, checkpoint, recipe or activity projections. Direct session-loop
+tests reject those broad queries, including after handoff and database reopen. This isolates coordinator context
+construction and execution; it does not claim that the domain-owned scheduler or the daemon process as a whole
+never loads product state. Ordinary workflows retain their context and model mappings.

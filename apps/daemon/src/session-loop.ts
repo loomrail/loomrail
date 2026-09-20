@@ -387,64 +387,22 @@ const activeAgentExecutionPolicy = (
 const readStageAttemptState = (
   deps: RunStageAttemptDeps,
 ): { attempt: StageAttempt; humanRequests: ProviderStageResultPolicy["humanRequests"] } => {
-  const snapshot = deps.state.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: deps.dispatch.workItemId });
-  const attempt =
-    snapshot.type === "WORKFLOW_SNAPSHOT"
-      ? snapshot.snapshot.stageAttempts.find(({ id }) => id === deps.dispatch.stageAttemptId)
-      : undefined;
-  if (!attempt) throw new Error("The StageAttempt backing this dispatch no longer exists");
-  // A question consumes the normal run's one provider-authored owner gate when it is opened, not
-  // only after it is answered. Carry the consumption across the first attempt of every later
-  // stage: those attempts are automatic workflow progression, not the explicit retry ADR-0004
-  // requires before a genuinely new business blocker can ask again. A retry has `attempt > 1` and
-  // receives one fresh gate of its own; once it opens that request, this same-attempt check closes
-  // it again. The OPEN state cannot normally reach a new session, but counting it closes that race
-  // as well.
-  //
-  // `dispatch.mode` is deliberately not used: RESUME also means an operator resumed a soft-paused
-  // or interrupted attempt, where no owner gate may have existed.
-  const stageAttemptIds =
-    snapshot.type === "WORKFLOW_SNAPSHOT"
-      ? new Set(snapshot.snapshot.stageAttempts.map(({ id }) => id))
-      : new Set<string>();
-  const requestsInRun =
-    snapshot.type === "WORKFLOW_SNAPSHOT"
-      ? snapshot.snapshot.humanRequests.filter(({ stageAttemptId }) => stageAttemptIds.has(stageAttemptId))
-      : [];
-  const gateUsedInAttempt = requestsInRun.some(({ stageAttemptId }) => stageAttemptId === attempt.id);
-  const inheritedGateUsed = attempt.attempt === 1 && requestsInRun.length > 0;
-  return {
-    attempt,
-    humanRequests: gateUsedInAttempt || inheritedGateUsed ? "DISALLOWED" : "ALLOWED",
-  };
+  const result = readAttemptSessions(deps, null);
+  return { attempt: result.attempt, humanRequests: result.humanRequests };
 };
 
 /**
  * The attempt's sessions, as one read: the next ordinal and "is one already running" are two
  * questions about the same list, and asking them separately would let the answers disagree.
  */
-const readAttemptSessions = (
-  deps: RunStageAttemptDeps,
-  agentRunId: string | null,
-): {
-  nextOrdinal: number;
-  running: boolean;
-  agentRunSessionCount: number;
-  agentRunUsageTotal: number;
-} => {
+const readAttemptSessions = (deps: RunStageAttemptDeps, agentRunId: string | null) => {
   const sessions = deps.state.query({
-    type: "LIST_PROVIDER_SESSIONS",
+    type: "READ_SESSION_LOOP_STATE",
     stageAttemptId: deps.dispatch.stageAttemptId,
+    agentRunId,
   });
-  if (sessions.type !== "PROVIDER_SESSIONS") throw new Error("Provider sessions could not be read");
-  return {
-    nextOrdinal: sessions.sessions.reduce((highest, { ordinal }) => Math.max(highest, ordinal), 0) + 1,
-    running: sessions.sessions.some(({ status }) => status === "RUNNING"),
-    agentRunSessionCount: sessions.sessions.filter((session) => session.agentRunId === agentRunId).length,
-    agentRunUsageTotal: sessions.usageReports
-      .filter((report) => report.agentRunId === agentRunId)
-      .reduce((total, report) => total + report.totalTokens, 0),
-  };
+  if (sessions.type !== "SESSION_LOOP_STATE") throw new Error("Session loop state could not be read");
+  return sessions;
 };
 
 const endSessionCommand = (
@@ -1127,26 +1085,15 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
    * Seeded from what is already stored, because this process is not the only thing that can have
    * degraded this feed -- a previous `runStageAttempt` call for the same AgentRun (a postponed
    * dispatch picked back up), or startup reconciliation marking a run whose buffer died with the
-   * daemon. Read best-effort: a feed that cannot be read is assumed intact rather than allowed to
-   * fail an attempt, which is the same rule every other line of the recorder follows.
+   * daemon. Read only its durable flag together with session accounting, never activity prose.
    */
-  const activityFeed = { degraded: false, degradedWritten: false };
-  try {
-    const stored = deps.state.query({ type: "LIST_AGENT_RUN_ACTIVITY", agentRunId, limit: 1 });
-    if (stored.type === "AGENT_RUN_ACTIVITY" && stored.degraded) {
-      activityFeed.degraded = true;
-      activityFeed.degradedWritten = true;
-    }
-  } catch (error: unknown) {
-    deps.logger.warn(
-      { stageAttemptId, error: errorName(error) },
-      "The activity feed's current state could not be read; this run starts from an intact feed",
-    );
-  }
-
-  const templateContextSpec = contextPackSpecFor(deps.template, readStageAttemptState(deps).attempt.stage);
-  const contextSpec = refineContextPackForRole(templateContextSpec, roleProfile.playbook);
   const initialSessions = readAttemptSessions(deps, agentRunId);
+  const activityFeed = {
+    degraded: initialSessions.activityDegraded,
+    degradedWritten: initialSessions.activityDegraded,
+  };
+  const templateContextSpec = contextPackSpecFor(deps.template, initialSessions.attempt.stage);
+  const contextSpec = refineContextPackForRole(templateContextSpec, roleProfile.playbook);
   if (initialSessions.running) {
     deps.logger.info(
       { stageAttemptId },
@@ -1429,22 +1376,6 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
 
     const sessionOrdinal = sessions.nextOrdinal;
     lastSessionOrdinal = sessionOrdinal;
-    const contextSnapshot = deps.state.query({
-      type: "READ_CONTEXT_SOURCES",
-      stageAttemptId,
-      sessionOrdinal,
-    });
-    if (contextSnapshot.type !== "CONTEXT_SOURCES") throw new Error("The context sources could not be read");
-    const reviewContext = await prepareReviewContext({
-      sources: contextSnapshot.sources,
-      workspace: lease.workspace,
-      readDiff: readReviewDiff,
-    });
-    if (reviewContext.type === "REFUSED") {
-      refuseDispatch({ ...reviewContext, type: "REVIEW_CONTEXT_UNAVAILABLE" });
-      return;
-    }
-
     // Spec §6.1 step 2: a share of the window declared by the adapter, never the whole window.
     // The share is derived from the attempt's own durable backoff count, not from a local variable:
     // §6.4 makes a daemon restart an ordinary end of a session, and a share held in memory would be
@@ -1459,43 +1390,65 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         ),
       ),
     );
-    const coordinator =
-      executionPolicy.snapshot.execution?.kind === "CODE_BLIND_MANAGER"
-        ? coordinatorPacketSchema.parse({
-            version: 1,
-            ownerOutcome: executionPolicy.snapshot.execution.ownerOutcome,
-            discovery: contextSnapshot.sources.stageHandoff?.stage === "DISCOVERY" ? "COMPLETED" : "UNKNOWN",
-            unresolvedQuestions: Math.min(
-              20,
-              contextSnapshot.sources.stageHandoff?.checkpoint.openQuestions.length ?? 0,
-            ),
-            attempt: attempt.attempt,
-            sessionOrdinal,
-          })
-        : undefined;
-    const assembled =
-      coordinator !== undefined
-        ? assembleCoordinatorPack({
+    const context = await (async () => {
+      if (executionPolicy.snapshot.execution?.kind === "CODE_BLIND_MANAGER") {
+        const facts = deps.state.query({ type: "READ_COORDINATOR_CONTEXT", stageAttemptId });
+        if (facts.type !== "COORDINATOR_CONTEXT") throw new Error("The coordinator facts could not be read");
+        const coordinator = coordinatorPacketSchema.parse({
+          version: 1,
+          ownerOutcome: executionPolicy.snapshot.execution.ownerOutcome,
+          discovery: facts.discoveryCheckpoint === null ? "UNKNOWN" : "COMPLETED",
+          unresolvedQuestions: facts.unresolvedQuestions,
+          attempt: attempt.attempt,
+          sessionOrdinal,
+        });
+        return {
+          type: "READY" as const,
+          coordinator,
+          verificationPlan: null,
+          acceptanceInput: null,
+          assembled: assembleCoordinatorPack({
             packet: coordinator,
             agentRunId,
-            ...(contextSnapshot.sources.stageHandoff?.stage === "DISCOVERY"
-              ? {
-                  discoveryCheckpoint: {
-                    id: contextSnapshot.sources.stageHandoff.checkpoint.id,
-                    version: contextSnapshot.sources.stageHandoff.checkpoint.version,
-                  },
-                }
-              : {}),
+            ...(facts.discoveryCheckpoint === null ? {} : { discoveryCheckpoint: facts.discoveryCheckpoint }),
             budgetTokens: Math.min(2_000, budgetTokens),
             bytesPerToken: BYTES_PER_TOKEN,
-          })
-        : assembleContextPack({
-            sources: reviewContext.sources,
-            spec: contextSpec,
-            budgetTokens,
-            bytesPerToken: BYTES_PER_TOKEN,
-            projection: "STAGE_V1",
-          });
+          }),
+        };
+      }
+      const snapshot = deps.state.query({ type: "READ_CONTEXT_SOURCES", stageAttemptId, sessionOrdinal });
+      if (snapshot.type !== "CONTEXT_SOURCES") throw new Error("The context sources could not be read");
+      const review = await prepareReviewContext({
+        sources: snapshot.sources,
+        workspace: lease.workspace,
+        readDiff: readReviewDiff,
+      });
+      if (review.type === "REFUSED") return review;
+      return {
+        type: "READY" as const,
+        coordinator: undefined,
+        verificationPlan: snapshot.verificationPlan,
+        acceptanceInput:
+          attempt.stage === "ACCEPTANCE"
+            ? {
+                criteria: review.sources.workItemBrief.acceptanceCriteria,
+                evidence: review.sources.evidence.map(({ kind, checks }) => ({ kind, checks })),
+              }
+            : null,
+        assembled: assembleContextPack({
+          sources: review.sources,
+          spec: contextSpec,
+          budgetTokens,
+          bytesPerToken: BYTES_PER_TOKEN,
+          projection: "STAGE_V1",
+        }),
+      };
+    })();
+    if (context.type === "REFUSED") {
+      refuseDispatch({ ...context, type: "REVIEW_CONTEXT_UNAVAILABLE" });
+      return;
+    }
+    const { coordinator, assembled } = context;
 
     if (assembled.type === "SOURCE_LIMIT_EXCEEDED") {
       refuseDispatch({
@@ -2089,7 +2042,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
                 projectId: deps.dispatch.projectId,
                 workspace: invocationWorkspace.workspace,
                 policy: executionPolicy.snapshot,
-                verificationPlan: contextSnapshot.verificationPlan,
+                verificationPlan: context.verificationPlan,
               });
         if (started.mcpSnapshots.length === 0 && workspaceTools === undefined) {
           mcpLease = { connections: [], close: () => Promise.resolve() };
@@ -2122,13 +2075,7 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
               remainingEstimatedTokens:
                 executionPolicy.snapshot.budget.maxEstimatedTokens - sessions.agentRunUsageTotal,
             }),
-            acceptanceInput:
-              attempt.stage === "ACCEPTANCE"
-                ? {
-                    criteria: reviewContext.sources.workItemBrief.acceptanceCriteria,
-                    evidence: reviewContext.sources.evidence.map(({ kind, checks }) => ({ kind, checks })),
-                  }
-                : null,
+            acceptanceInput: context.acceptanceInput,
             humanRequests,
             mcpConnections,
             authoritySignal,
@@ -2345,9 +2292,9 @@ const runProviderSessions = async (deps: RunStageAttemptDeps, lease: WorkspaceLe
         if (isAuthorityRevoked(authoritySignal)) return;
         // The stage-level result. The outcome is untrusted provider output and is validated where it
         // is written: `execute` parses the whole command, outcome included, before touching state.
-        const current = deps.state.query({ type: "GET_WORKFLOW_SNAPSHOT", workItemId: attempt.workItemId });
-        if (current.type !== "WORKFLOW_SNAPSHOT") throw new Error("The workflow snapshot was not found");
-        const currentAttempt = current.snapshot.stageAttempts.find(({ id }) => id === stageAttemptId);
+        const current = deps.state.query({ type: "GET_STAGE_ATTEMPT", stageAttemptId });
+        if (current.type !== "STAGE_ATTEMPT") throw new Error("The StageAttempt was not found");
+        const currentAttempt = current.stageAttempt;
         // Soft Pause lets the in-flight turn report usage and close normally, but it forbids the
         // stale outcome from advancing the paused workflow.
         if (currentAttempt?.status !== "RUNNING") {

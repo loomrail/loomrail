@@ -2,6 +2,9 @@
 
 **Дата:** 2026-09-19. **Статус:** экспериментальный локальный срез реализован и проверен; live qualification pending.
 
+**Обновлено 2026-09-20:** замечания независимых Standards/Spec reviews исправлены; допуск нового native CLI и
+реальный сквозной прогон пока не завершены. Опубликованный 0.1.3 не содержит этот режим.
+
 Владелец дополнительно разрешил commit/push/PR и минимальные реальные Codex пробы, исключив Sonnet.
 Три standalone smoke вызова завершены; это не разрешение менять compatibility admission или выпускать новый режим
 через approved source 0.1.3. [Очищенные результаты](../evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
@@ -83,3 +86,14 @@ Independent Review, Project verification, Browser QA и принятие вла�
   CLI fixture явно synthetic: она проверяет успешный PLAN и argv, но не выдаётся за live recording.
 - Public-tree/toolchain/activation и formatting повторно прошли; `git diff --check` чистый.
   Raw logs и снимки остаются вне Git. npm publication и admission changes не выполнялись.
+
+## Закрытие review, 2026-09-20
+
+- Обычный model mapping Astra больше не включает coordinator authority по имени модели: режим задаётся явно.
+- Менеджер читает отдельные закрытые факты Discovery, а не обычный context graph с последующей фильтрацией.
+- Служебные чтения session loop также сужены до metadata/counts; HumanRequest prose, checkpoint/recipe и activity
+  payloads не загружаются для сборки/исполнения manager session. Scheduler/domain по-прежнему владеют полным state.
+- Добавлены проверки capped count (2 и 50→20), точного checkpoint provenance, изоляции другого pipeline, запрета
+  широких queries и handoff→reopen→session 2 с сохранением расхода. Ordinary full workflow остаётся покрытым.
+- Оба reviewer повторно проверили исправления и SQL-семантику one-human-gate; открытых замечаний к diff не осталось.
+  Результаты финальных проверок записываются в [evidence](../evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).

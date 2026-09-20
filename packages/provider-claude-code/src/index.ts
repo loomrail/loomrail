@@ -155,7 +155,7 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       invocation: ProviderInvocation,
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
-      if (invocation.coordinator !== undefined || invocation.modelId === "gpt-6-astra") {
+      if (invocation.coordinator !== undefined) {
         throw new ProviderInvocationAuthorityError(
           "COORDINATOR_AUTHORITY_MISMATCH",
           "This coordinator is pinned to CODEX; Claude/Fable is not qualified",

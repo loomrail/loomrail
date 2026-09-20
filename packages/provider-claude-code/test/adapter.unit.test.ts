@@ -82,7 +82,23 @@ describe("local Claude Code provider", () => {
   it("refuses coordinator substitution before starting any CLI process", async () => {
     const sink = listener();
     const provider = createClaudeCodeProvider({ command: process.execPath });
-    await expect(provider.start({ ...invocation(), modelId: "gpt-6-astra" }, sink)).rejects.toMatchObject({
+    await expect(
+      provider.start(
+        {
+          ...invocation(),
+          modelId: "gpt-6-astra",
+          coordinator: {
+            version: 1,
+            ownerOutcome: "Deliver the owner-approved result.",
+            discovery: "UNKNOWN",
+            unresolvedQuestions: 0,
+            attempt: 1,
+            sessionOrdinal: 1,
+          },
+        },
+        sink,
+      ),
+    ).rejects.toMatchObject({
       code: "COORDINATOR_AUTHORITY_MISMATCH",
     });
     expect(sink.pids).toEqual([]);
@@ -97,28 +113,33 @@ describe("local Claude Code provider", () => {
     });
   });
 
-  it("accepts only a validated result from a normally completed CLI turn", async () => {
-    const sink = listener();
-    const provider = createClaudeCodeProvider({
-      command: process.execPath,
-      commandArgsPrefix: [fixture, "--fixture-output", successRecording],
-    });
-    await expect(provider.start(invocation(), sink)).resolves.toMatchObject({
-      type: "COMPLETED",
-      summary: "macOS adapter success capture",
-    });
-    expect(sink.checkpoints).toHaveLength(1);
-    expect(sink.usage).toEqual([
-      {
-        inputTokens: 26_524,
-        outputTokens: 241,
-        cachedInputTokens: 0,
-        costUsd: 0.054243,
-        quality: "ACTUAL",
-      },
-    ]);
-    expect(sink.pids).toHaveLength(1);
-  });
+  it.each([undefined, "gpt-6-astra"])(
+    "accepts a validated ordinary CLI result without reserving a model name (%s)",
+    async (modelId) => {
+      const sink = listener();
+      const provider = createClaudeCodeProvider({
+        command: process.execPath,
+        commandArgsPrefix: [fixture, "--fixture-output", successRecording],
+      });
+      await expect(
+        provider.start({ ...invocation(), ...(modelId === undefined ? {} : { modelId }) }, sink),
+      ).resolves.toMatchObject({
+        type: "COMPLETED",
+        summary: "macOS adapter success capture",
+      });
+      expect(sink.checkpoints).toHaveLength(1);
+      expect(sink.usage).toEqual([
+        {
+          inputTokens: 26_524,
+          outputTokens: 241,
+          cachedInputTokens: 0,
+          costUsd: 0.054243,
+          quality: "ACTUAL",
+        },
+      ]);
+      expect(sink.pids).toHaveLength(1);
+    },
+  );
 
   it("keeps hostile Acceptance vocabulary out of its native output schema", async () => {
     const directory = await mkdtemp(join(tmpdir(), "loomrail-claude-acceptance-test-"));

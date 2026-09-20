@@ -16,6 +16,7 @@ import type {
 import {
   MAX_VERIFICATION_RECIPE_TIMEOUT_SECONDS,
   coordinatorModelId,
+  economyModelIds,
   serializeCoordinatorPacket,
   providerIdSchema,
   providerModelIdSchema,
@@ -346,7 +347,7 @@ export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): 
   if (
     invocation.economyWorker === true &&
     (invocation.coordinator !== undefined ||
-      !["gpt-5.6-luna", "claude-sonnet-5"].includes(invocation.modelId ?? ""))
+      !Object.values(economyModelIds).some((modelId) => modelId === invocation.modelId))
   ) {
     throw new ProviderInvocationAuthorityError(
       "COORDINATOR_AUTHORITY_MISMATCH",
@@ -354,9 +355,8 @@ export const renderProviderInvocationPrompt = (invocation: ProviderInvocation): 
       { access: "READ_ONLY", tool: null },
     );
   }
-  if (invocation.coordinator !== undefined || invocation.modelId === coordinatorModelId) {
+  if (invocation.coordinator !== undefined) {
     if (
-      invocation.coordinator === undefined ||
       invocation.session.stage !== "PLAN" ||
       invocation.modelId !== coordinatorModelId ||
       invocation.modelTier !== "DEEP" ||

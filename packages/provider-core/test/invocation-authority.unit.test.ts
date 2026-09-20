@@ -77,6 +77,13 @@ const invocation = (access?: "READ_ONLY" | "READ_WRITE"): ProviderInvocation => 
 };
 
 describe("provider invocation authority prompt", () => {
+  it("preserves ordinary Astra mappings without opting into the coordinator role", () => {
+    const input = { ...invocation("READ_WRITE"), modelId: "gpt-6-astra" };
+    const prompt = renderProviderInvocationPrompt(input);
+    expect(prompt).toContain(input.contextPack.text);
+    expect(prompt).toContain("READ_WRITE workspace authority");
+    expect(prompt).not.toContain("Loomrail code-blind coordinator v1");
+  });
   it("accepts only the exact code-blind packet and refuses every source-bearing authority channel", () => {
     const base = invocation();
     const coordinator = {

@@ -1620,6 +1620,13 @@ const stateQuerySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("GET_STAGE_ATTEMPT"), stageAttemptId: opaqueIdSchema }).strict(),
   z
     .object({
+      type: z.literal("READ_SESSION_LOOP_STATE"),
+      stageAttemptId: opaqueIdSchema,
+      agentRunId: opaqueIdSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
       type: z.literal("LIST_AGENT_RUN_ACTIVITY"),
       agentRunId: opaqueIdSchema,
       // 2_000, not the table's own 1_000-row bound: a caller reading the buffer at its cap must
@@ -1715,6 +1722,7 @@ const stateQuerySchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("LIST_PROVIDER_SESSIONS"), stageAttemptId: opaqueIdSchema }).strict(),
+  z.object({ type: z.literal("READ_COORDINATOR_CONTEXT"), stageAttemptId: opaqueIdSchema }).strict(),
   z.object({ type: z.literal("GET_WORKSPACE_BY_WORK_ITEM"), workItemId: opaqueIdSchema }).strict(),
 ]);
 
@@ -4200,6 +4208,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        ORDER BY created_at DESC, id DESC LIMIT 1`,
     );
     const selectStageAttemptById = database.prepare("SELECT * FROM stage_attempts WHERE id = ?");
+    // Operational state only: no task prose, decisions, checkpoints, recipes or activity payloads.
+    // All counters and the human-gate decision share one SQLite statement snapshot.
+    // Opening a human request consumes its gate even before resolution. First attempts inherit
+    // the run's consumed gate; an explicit retry gets one fresh gate until that attempt asks.
+    const selectSessionLoopState = database.prepare(
+      `SELECT a.*,
+         CASE WHEN EXISTS (SELECT 1 FROM human_requests h WHERE h.stage_attempt_id = a.id)
+           OR (a.attempt = 1 AND EXISTS (
+             SELECT 1 FROM human_requests h JOIN stage_attempts sibling ON sibling.id = h.stage_attempt_id
+             WHERE sibling.pipeline_run_id = a.pipeline_run_id
+           )) THEN 1 ELSE 0 END AS human_gate_used,
+         (SELECT COALESCE(MAX(p.ordinal), 0) + 1 FROM provider_sessions p WHERE p.stage_attempt_id = a.id) AS next_ordinal,
+         EXISTS (SELECT 1 FROM provider_sessions p WHERE p.stage_attempt_id = a.id AND p.status = 'RUNNING') AS running,
+         (SELECT COUNT(*) FROM provider_sessions p WHERE p.stage_attempt_id = a.id AND p.agent_run_id IS ?) AS agent_run_sessions,
+         (SELECT COALESCE(SUM(u.total_tokens), 0) FROM provider_usage_reports u WHERE u.stage_attempt_id = a.id AND u.agent_run_id IS ?) AS agent_run_usage,
+         COALESCE((SELECT degraded FROM agent_run_activity_state WHERE agent_run_id = ?), 0) AS activity_degraded
+       FROM stage_attempts a WHERE a.id = ?`,
+    );
     const selectHumanRequestById = database.prepare("SELECT * FROM human_requests WHERE id = ?");
     const selectHumanRequestOptions = database.prepare(
       `SELECT id, label, consequence, recommended FROM human_request_options
@@ -4843,6 +4869,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
        WHERE a.pipeline_run_id = ? AND a.stage = ? AND a.status = 'SUCCEEDED'
          AND a.correction_run_id IS NULL AND a.verification_correction_run_id IS NULL
        ORDER BY a.attempt DESC, p.ordinal DESC, c.ordinal DESC LIMIT 1`,
+    );
+    // One SQLite snapshot, selecting only provenance and a bounded count. Checkpoint prose,
+    // WorkItem text, Decisions and Constitution must never cross this query's boundary (T88).
+    const selectCoordinatorContext = database.prepare(
+      `SELECT c.id AS checkpoint_id,
+         CASE WHEN c.id IS NULL THEN 0
+           ELSE MIN(20, json_array_length(c.open_questions_json)) END AS unresolved_questions
+       FROM stage_attempts target
+       LEFT JOIN checkpoints c ON c.id = (
+         SELECT upstream.id FROM checkpoints upstream
+         JOIN stage_attempts a ON a.id = upstream.stage_attempt_id
+         JOIN provider_sessions p ON p.id = upstream.provider_session_id
+         WHERE a.pipeline_run_id = target.pipeline_run_id AND a.stage = 'DISCOVERY'
+           AND a.status = 'SUCCEEDED'
+           AND a.correction_run_id IS NULL AND a.verification_correction_run_id IS NULL
+         ORDER BY a.attempt DESC, p.ordinal DESC, upstream.ordinal DESC LIMIT 1
+       )
+       WHERE target.id = ? AND target.stage = 'PLAN'`,
     );
     const selectRecentEventsForAggregate = database.prepare(
       "SELECT * FROM events WHERE aggregate_id = ? ORDER BY sequence DESC LIMIT ?",
@@ -14888,6 +14932,36 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
         }
         case "GET_STAGE_ATTEMPT":
           return { type: "STAGE_ATTEMPT", stageAttempt: readStageAttempt(queryValue.stageAttemptId) };
+        case "READ_SESSION_LOOP_STATE": {
+          const value = selectSessionLoopState.get(
+            queryValue.agentRunId,
+            queryValue.agentRunId,
+            queryValue.agentRunId,
+            queryValue.stageAttemptId,
+          );
+          if (value === undefined)
+            throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The StageAttempt does not exist");
+          const counters = z
+            .object({
+              human_gate_used: z.union([z.literal(0), z.literal(1)]),
+              next_ordinal: z.number().int().positive(),
+              running: z.union([z.literal(0), z.literal(1)]),
+              agent_run_sessions: z.number().int().nonnegative(),
+              agent_run_usage: z.number().int().nonnegative(),
+              activity_degraded: z.union([z.literal(0), z.literal(1)]),
+            })
+            .parse(value);
+          return {
+            type: "SESSION_LOOP_STATE",
+            attempt: stageAttemptFromRow(value),
+            humanRequests: counters.human_gate_used === 1 ? "DISALLOWED" : "ALLOWED",
+            nextOrdinal: counters.next_ordinal,
+            running: counters.running === 1,
+            agentRunSessionCount: counters.agent_run_sessions,
+            agentRunUsageTotal: counters.agent_run_usage,
+            activityDegraded: counters.activity_degraded === 1,
+          };
+        }
         case "GET_QA_RUN": {
           const value = selectQARunById.get(queryValue.qaRunId);
           return { type: "QA_RUN", qaRun: value === undefined ? null : qaRunFromRow(value) };
@@ -15091,6 +15165,24 @@ export const openLocalState = async (options: OpenLocalStateOptions): Promise<Lo
             type: "CONTEXT_SOURCES",
             ...readContextSourcesSnapshot(queryValue.stageAttemptId, queryValue.sessionOrdinal),
           };
+        case "READ_COORDINATOR_CONTEXT": {
+          const value = selectCoordinatorContext.get(queryValue.stageAttemptId);
+          if (value === undefined) {
+            throw new WorkflowDomainError("WORKFLOW_NOT_FOUND", "The PLAN StageAttempt does not exist");
+          }
+          const row = z
+            .object({
+              checkpoint_id: opaqueIdSchema.nullable(),
+              unresolved_questions: z.number().int().min(0).max(20),
+            })
+            .strict()
+            .parse(value);
+          return {
+            type: "COORDINATOR_CONTEXT",
+            discoveryCheckpoint: row.checkpoint_id === null ? null : { id: row.checkpoint_id, version: 1 },
+            unresolvedQuestions: row.unresolved_questions,
+          };
+        }
         // The nesting spec §D5 introduces, read back in one place: the attempt's sessions in
         // ordinal order, the recipe each one was assembled from, and every checkpoint published
         // under the attempt. Kept out of GET_WORKFLOW_SNAPSHOT deliberately -- the snapshot is
