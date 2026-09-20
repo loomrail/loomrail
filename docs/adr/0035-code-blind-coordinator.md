@@ -1,6 +1,6 @@
 # ADR-0035 — A code-blind planning coordinator
 
-**Status:** Accepted for implementation; live qualification pending
+**Status:** Accepted for implementation; live qualification passed; compatibility admission pending
 
 **Date:** 2026-09-19
 

@@ -71,12 +71,66 @@ serialized through its supported environment setting. The default parallel brows
 client-side navigation timeout under heavy host load; the isolated scenario, the serialized browser package (37/37)
 and the complete serialized workspace run all passed without changing product timeouts.
 
+## Successful owner-authorized native qualification, 2026-09-20
+
+The owner then authorized a new, separate ceiling of 200000 input-plus-output tokens for the full native route,
+with a minimum 35000-token reserve before every new provider session. The prior negative attempt was not charged
+to this new ceiling. The qualification used the installed Codex CLI `0.155.0-alpha.9.2` on `darwin/arm64`, a new
+disposable one-file repository and SQLite database outside Git, the production Codex adapter, the production
+workspace/MCP bridge and the normal six-stage workflow. Sonnet and Fable remained excluded.
+
+| Stage      | Session | Requested model | Input tokens | Cached input | Output tokens | Reasoning output | Durable result                           |
+| ---------- | ------: | --------------- | -----------: | -----------: | ------------: | ---------------: | ---------------------------------------- |
+| Discovery  |       1 | gpt-5.6-luna    |        23628 |        14848 |           839 |              171 | safe HumanRequest; no mutation           |
+| Discovery  |       2 | gpt-5.6-luna    |        20917 |        11776 |           438 |              140 | COMPLETED                                |
+| Plan       |       1 | gpt-6-astra     |         6900 |            0 |           367 |               38 | semantic schema rejection; no checkpoint |
+| Plan       |       2 | gpt-6-astra     |         6898 |            0 |           348 |               47 | valid PLAN checkpoint                    |
+| Implement  |       1 | gpt-5.6-luna    |        39931 |        28672 |           593 |               79 | COMPLETED                                |
+| Review     |       1 | gpt-5.6-luna    |        23622 |        13824 |           476 |              100 | PASSED, zero findings                    |
+| Acceptance |       1 | gpt-5.6-luna    |         7018 |            0 |           410 |              223 | READY_FOR_ACCEPTANCE                     |
+
+The exact total was 132385 input-plus-output tokens, leaving 67615 under the authorized ceiling. Cached input is
+already part of input and reasoning output is already part of output. The reserve was checked before every spawn;
+it was never crossed. QA was the deterministic measured Browser QA stage and did not start a provider session.
+
+The first Discovery session emitted a superfluous non-blocking `Proceeding` confirmation even though it correctly
+recognized that no new owner information was needed. The owner explicitly authorized continuing safe gates; the
+same durable attempt resumed and completed. The first Astra result was valid JSON but used one-based `dependsOn`
+references, so the semantic DAG validator rejected it and opened the normal blocking diagnostic request without
+publishing a checkpoint. Inspection of sanitized activity identified the exact mismatch. The owner-authorized
+answer requested zero-based references to earlier orders; the same Plan attempt resumed and produced a valid DAG.
+These events are retained as qualification evidence rather than hidden as a clean first-pass result.
+
+After the corrected Plan, the harness shut down the MCP gateway, closed SQLite, reopened both and confirmed the
+durable Plan sessions were unchanged before continuing. Implement changed the sole tracked file from
+`committed\n` to exactly `Current work\n`; independent Review reread the result and returned no findings. The
+deterministic QA gate passed, Acceptance produced a criterion-linked package, and the owner-authorized final gate
+was resolved only after the harness rechecked all six stages, exact file bytes and the workspace-tool audit. The
+PipelineRun ended `SUCCEEDED`, the WorkItem ended `DONE`, and the AcceptancePackage ended `ACCEPTED`.
+
+Runtime invocation assertions and durable policy snapshots established the authority split:
+
+- Astra Plan requested `gpt-6-astra`, had workspace `NONE`, network false and no MCP connections; its closed context
+  did not contain the disposable filename or either old/new file contents.
+- Discovery and Review requested `gpt-5.6-luna` with read-only workspace tools. Implement requested the same model
+  with read-write tools. Acceptance had workspace `NONE` and no MCP connections.
+- Durable tool audit recorded all successful write-class operations only under Implement; Discovery and Review
+  performed reads, and no manager or Acceptance workspace call existed.
+
+The raw database, CLI activity and disposable worktree remain outside Git. Only this sanitized summary is retained.
+As with the smoke probes, persisted requested model IDs and exact CLI arguments do not independently attest the
+service-side model identity. The run qualifies this installed native route and its fail-closed recovery behavior;
+it is not a quality/cost non-inferiority benchmark and does not itself change compatibility admission.
+
+After recording this evidence, the complete serialized `pnpm verify` passed again: formatting, public readiness,
+lint, typecheck and all workspace tests, including provider-core 90/90, Codex adapter 58/58, Browser QA 37/37,
+MCP gateway 28/28, persistence 213/213, daemon 370/370 and CLI 33/33.
+
 ## Remaining release gates
 
 - The new installed Codex version is still **not admitted** by Loomrail; existing exact admission rows are unchanged.
-- A fresh, separately authorized native workspace/MCP allow-deny, six-stage workflow and recovery qualification is
-  still required after the Discovery authority fix. Any future harness must reserve a complete worst-observed
-  session before dispatch because usage enforcement is post-session.
+- Promoting this exact CLI/runtime identity still requires the owner's separate admission confirmation. The native
+  workspace/MCP allow-deny, six-stage workflow and restart qualification itself is now complete.
 - Fable and Sonnet were not exercised; Fable is unavailable in this first slice.
 - No measured non-inferiority or full-task savings claim is made.
 - The new mode is not part of published npm 0.1.3 and must not ship through that release identity.

@@ -1,13 +1,16 @@
 # 133 — Координатор без доступа к репозиторию
 
-**Дата:** 2026-09-19. **Статус:** экспериментальный локальный срез реализован и проверен; live qualification pending.
+**Дата:** 2026-09-19. **Статус:** экспериментальный локальный срез и native qualification завершены;
+compatibility admission pending.
 
-**Обновлено 2026-09-20:** замечания независимых Standards/Spec reviews исправлены; допуск нового native CLI и
-реальный сквозной прогон пока не завершены. Опубликованный 0.1.3 не содержит этот режим.
+**Обновлено 2026-09-20:** замечания независимых Standards/Spec reviews исправлены; реальный сквозной
+Astra→Luna прогон завершил все шесть стадий, restart/recovery и owner Acceptance. Допуск exact native CLI
+остаётся отдельным решением. Опубликованный 0.1.3 не содержит этот режим.
 
 Владелец дополнительно разрешил commit/push/PR и минимальные реальные Codex пробы, исключив Sonnet.
-Три standalone smoke вызова завершены; это не разрешение менять compatibility admission или выпускать новый режим
-через approved source 0.1.3. [Очищенные результаты](../evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
+Три standalone smoke вызова и отдельная bounded native qualification завершены; это не разрешение менять
+compatibility admission или выпускать новый режим через approved source 0.1.3.
+[Очищенные результаты](../evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
 
 ## Граница
 
@@ -68,8 +71,9 @@ Independent Review, Project verification, Browser QA и принятие вла�
 
 Лимит координатора — не более 12 000 estimated tokens и двух сессий на AgentRun, дополнительно ограниченный
 остатком общего бюджета. Это post-session accounting, а не обещание остановить генерацию ровно на границе.
-Недоступный или несовместимый Codex не заменяется Claude/Fable. Отдельная live qualification, проверка доступа
-аккаунта к Astra и измерение стоимости/качества ещё нужны; этот срез их не подменяет.
+Недоступный или несовместимый Codex не заменяется Claude/Fable. Live qualification подтвердила доступ аккаунта к
+Astra и полный локальный маршрут для установленного CLI; compatibility admission и измерение стоимости/качества
+остаются отдельными решениями.
 
 ## Локальные проверки
 
@@ -80,12 +84,16 @@ Independent Review, Project verification, Browser QA и принятие вла�
 - Сквозной synthetic CODEX workflow проходит через все шесть этапов до owner Acceptance; тест не запускает CLI.
 - Валидация closed packet/plan DAG, запрет authority/model substitution, immutable policy, повтор команды и reopen.
 - `pnpm verify` завершён успешно: formatting, public readiness, lint, typecheck и полный набор workspace tests.
-  В том числе persistence: 213/213, daemon: 369/369, CLI: 33/33.
+  В том числе persistence: 213/213, daemon: 370/370, CLI: 33/33.
 - После последних правок повторены web typecheck / lint / оба browser opt-in сценария; provider-core и Codex
   typecheck/lint, декодирование максимально длинных work orders (3/3), Codex adapter (6/6) и сквозной новый режим.
   CLI fixture явно synthetic: она проверяет успешный PLAN и argv, но не выдаётся за live recording.
 - Public-tree/toolchain/activation и formatting повторно прошли; `git diff --check` чистый.
   Raw logs и снимки остаются вне Git. npm publication и admission changes не выполнялись.
+- Owner-authorized native qualification на Codex CLI `0.155.0-alpha.9.2` завершила Discovery, code-blind Plan,
+  Implement, independent Review, deterministic QA, Acceptance и restart после Plan. Точный расход нового прогона —
+  132385 input-plus-output токенов из 200000; write-class tool calls существовали только в Implement. Первый Plan
+  потребовал bounded resume из-за one-based DAG references; исправленный второй результат прошёл closed schema.
 
 ## Закрытие review, 2026-09-20
 
