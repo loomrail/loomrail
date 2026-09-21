@@ -1,6 +1,7 @@
-/* Loomrail public landing.
- * Layout: centred hero over a real product capture, then an explanatory four-step walkthrough,
- * install, scope and documentation. Surfaces, radii and the accent match the Workbench UI.
+/* Hallmark · macrostructure: Map / Diagram · tone: technical · anchor hue: 277
+ * Genre: modern-minimal · theme: Loomrail existing system · nav: N1b · footer: Ft5
+ * H2: text + semantic route, no invented product capture. No decorative reveals.
+ * Pre-emit critique: P4 H4 E4 S5 R5 V4. Contrast: AA text; mobile: pass (320–768px).
  */
 @import "./tokens.css";
 
@@ -1201,5 +1202,360 @@ h3 {
 
   .terminal .line-last::after {
     opacity: 0.65;
+  }
+}
+
+/* Orchestration tour — existing tokens, native disclosure, no simulated telemetry. */
+h1,
+h2,
+h3 {
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.header-bar {
+  min-height: 4.5rem;
+  height: auto;
+  padding-block: var(--space-xs);
+}
+
+.header-links a,
+.footer-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-height);
+  white-space: nowrap;
+}
+
+.hero {
+  padding-block: var(--space-3xl);
+}
+
+.hero-inner {
+  display: grid;
+  gap: var(--space-2xl);
+  max-width: var(--shell-width);
+  text-align: start;
+}
+
+.hero-copy,
+.route-map,
+.starter-feature > *,
+.orchestration-grid > * {
+  min-width: 0;
+}
+
+.hero h1 {
+  margin: 0;
+  max-width: 13ch;
+  font-weight: 650;
+  line-height: 1.07;
+}
+
+.hero-platform {
+  margin-bottom: var(--space-lg);
+  color: var(--color-text-2);
+  font-size: var(--text-sm);
+}
+
+.hero-lede {
+  margin-inline: 0;
+  max-width: 43ch;
+}
+
+.hero-actions {
+  justify-content: start;
+}
+
+.hero-source,
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-height);
+  margin-top: var(--space-md);
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.route-map {
+  align-self: center;
+  border-block: var(--rule) solid var(--color-border-strong);
+}
+
+.route-map figcaption {
+  padding-block: var(--space-lg);
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.route-stage {
+  border-top: var(--rule) solid var(--color-border);
+}
+
+.route-stage summary {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+  padding: var(--space-sm) var(--space-xs);
+  min-height: 3.25rem;
+  font-size: var(--text-base);
+  cursor: pointer;
+  list-style: none;
+}
+
+.route-stage summary::-webkit-details-marker {
+  display: none;
+}
+
+.route-stage summary:hover {
+  background: var(--color-bg-subtle);
+}
+
+.route-stage[open] summary {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.route-index {
+  font-family: var(--font-code);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-2);
+}
+
+.route-toggle {
+  margin-inline-start: auto;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+.route-stage[open] .route-toggle {
+  transform: rotate(45deg);
+}
+
+.route-detail {
+  padding: var(--space-xs) var(--space-md) var(--space-lg) var(--space-2xl);
+}
+
+.route-detail h3 {
+  font-size: var(--text-base);
+}
+
+.route-detail p,
+.route-note {
+  color: var(--color-text-2);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.route-detail p {
+  margin-top: var(--space-xs);
+}
+
+.route-note {
+  border-top: var(--rule) solid var(--color-border);
+  padding-block: var(--space-md);
+}
+
+.strip li::before {
+  content: none;
+}
+
+.cards {
+  gap: var(--space-lg) var(--space-2xl);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.card {
+  padding: var(--space-lg) 0 0;
+  border: 0;
+  border-top: var(--rule) solid var(--color-border-strong);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.card h3,
+.starter-options h3 {
+  font-size: var(--text-lg);
+}
+
+.card p {
+  font-size: var(--text-base);
+}
+
+.orchestration-grid {
+  display: grid;
+  gap: var(--space-xl);
+}
+
+.ownership-list > div {
+  padding-block: var(--space-lg);
+  border-top: var(--rule) solid var(--color-border-strong);
+}
+
+.ownership-list dt {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.ownership-list dd {
+  margin-top: var(--space-xs);
+  color: var(--color-text-2);
+}
+
+.research-note {
+  display: grid;
+  gap: var(--space-sm);
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-xl);
+  border-top: var(--rule) solid var(--color-border-strong);
+  max-width: 65ch;
+}
+
+.research-note p,
+.starter-feature p,
+.starter-options p {
+  color: var(--color-text-2);
+}
+
+.research-note .text-link {
+  margin-top: 0;
+}
+
+.starter-feature {
+  display: grid;
+  gap: var(--space-xl);
+  padding-block: var(--space-xl);
+  border-block: var(--rule) solid var(--color-border-strong);
+}
+
+.starter-feature h3 {
+  margin-block: var(--space-sm) var(--space-md);
+  font-size: var(--text-xl);
+}
+
+.starter-kind {
+  font-size: var(--text-sm);
+}
+
+.starter-feature .starter-limit {
+  margin-top: var(--space-md);
+  font-size: var(--text-sm);
+}
+
+.file-manifest {
+  padding: var(--space-lg);
+  background: var(--color-bg-subtle);
+  color: var(--color-text);
+}
+
+.file-manifest figcaption {
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.file-manifest pre {
+  margin-block: var(--space-md);
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.file-manifest p {
+  font-size: var(--text-sm);
+}
+
+.starter-options {
+  display: grid;
+  gap: var(--space-xl) var(--space-2xl);
+  padding-top: var(--space-xl);
+}
+
+.starter-options p {
+  margin-top: var(--space-sm);
+}
+
+.terminal-label,
+.copy,
+.facts dt {
+  font-size: var(--text-xs);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.copy {
+  min-height: var(--control-height);
+  padding-inline: var(--space-md);
+  color: var(--color-code-fg);
+}
+
+.terminal .line-last::after {
+  animation: none;
+  content: none;
+}
+
+.docs-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 var(--space-2xl);
+}
+
+.doc-card {
+  padding: var(--space-lg) 0;
+  border: 0;
+  border-top: var(--rule) solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.doc-card:hover {
+  box-shadow: none;
+}
+
+.footer-closing {
+  display: flex;
+  align-items: start;
+  flex-direction: column;
+  gap: var(--space-xl);
+  padding-block: var(--space-3xl);
+}
+
+.footer-closing h2 {
+  max-width: 23ch;
+}
+
+@media (min-width: 40rem) {
+  .starter-options,
+  .docs-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .footer-closing {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+@media (min-width: 62rem) {
+  .hero-inner {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: var(--space-3xl);
+    align-items: center;
+  }
+
+  .cards {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .orchestration-grid,
+  .starter-feature {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--space-3xl);
   }
 }

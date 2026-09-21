@@ -15,11 +15,11 @@ const productVersion = cliPackage.version;
 
 const messages = {
   en: {
-    pageTitle: "Loomrail — The task outlives the chat.",
+    pageTitle: "Loomrail — Orchestrate agents. Own the outcome.",
     metaDescription:
-      "A local control plane for accountable AI software work: durable task state, gates, evidence, budgets, and owner acceptance.",
+      "Local orchestration for Codex and Claude: six workflow stages, independent review, measured QA and a TypeScript starter. macOS Apple Silicon.",
     ogDescription:
-      "Keep the brief, allowed actions, evidence, budgets, and owner decision in one local record.",
+      "Bring your repository or start from a TypeScript boilerplate. Plan, implement, review and verify with local CLIs. You accept the result.",
     skipLink: "Skip to content",
     primaryNavigation: "Primary navigation",
     homeLabel: "Loomrail home",
@@ -36,85 +36,35 @@ const messages = {
     switchToLight: "Switch to light theme",
     switchToDark: "Switch to dark theme",
 
-    heroTitle: "The task outlives the chat.",
+    heroTitle: "Orchestrate agents. Own the outcome.",
     heroBody:
-      "A local control plane for AI coding agents. The brief, the limits, the open questions and the final decision live in one durable record on your machine — not in a transcript that ends with the session.",
-    heroPrimaryCta: "Install and run",
-    heroSecondaryCta: "See how it works",
-    heroNote: "Free and open source · Apache-2.0 · Runs entirely on your machine",
-    promisesLabel: "What Loomrail never does",
+      "Bring Codex and Claude into one accountable workflow. Plan the work, run a bounded implementation, review the changes and check the result — with you making the final decision.",
+    heroPrimaryCta: "Try locally",
+    heroSecondaryCta: "Choose your starting point",
+    heroNote: "Open source · Apache-2.0 · Local state, your CLI subscriptions",
+    promisesLabel: "Control stays with you",
     promiseCommit: "Never commits",
     promisePush: "Never pushes",
     promiseMerge: "Never merges",
-    promiseDeploy: "Never deploys",
+    promiseDeploy: "No automatic deploy",
     promiseAccept: "You accept the delivery",
 
-    whyTitle: "Chat is a poor place to keep a task.",
+    whyTitle: "The task outlives the chat.",
     whyBody:
-      "A session ends, a process dies, a provider changes. Anything that lived only in the transcript goes with it. Loomrail moves the parts that matter out of the conversation and into a record that a deterministic state machine owns.",
+      "Switch sessions without losing the brief, the open questions or the decision. Loomrail keeps the work in a durable local record, so you can see what happened and what still needs attention.",
     whyOneTitle: "Durable by default",
     whyOneBody:
-      "State, requests, budgets, evidence and decisions are written to local SQLite in one transaction. Restart the daemon and the task is exactly where you left it.",
-    whyTwoTitle: "Bounded by design",
+      "State, questions, evidence and decisions are stored locally. After a restart, recover recorded progress and identify interrupted work without silently replaying an agent.",
+    whyTwoTitle: "Limits you can inspect",
     whyTwoBody:
-      "Every task carries allowed actions and a spend limit. The agent works inside them, and raising a limit is an explicit decision that gets recorded.",
+      "Set allowed actions and session limits, inspect recorded usage and approve any increase. Budget accounting is reconciled after the provider session.",
     whyThreeTitle: "You stay the owner",
     whyThreeBody:
-      "An agent never closes its own task. Loomrail never commits, pushes, merges or deploys. The delivery is accepted or returned by a person.",
+      "An agent never accepts its own work. Commit, push and merge remain your actions. Guided deployment requires a separate eligible plan and owner approval.",
 
-    howTitle: "How a task moves through Loomrail",
+    howTitle: "Agents do the work. Loomrail keeps it accountable.",
     howIntro:
-      "Four steps, the same every time. New sessions run through your signed-in local Codex or Claude Code CLI; no API key is passed to Loomrail.",
-    stepOneTitle: "Write the task, not the prompt",
-    stepOneBody:
-      "A task states its outcome, its acceptance criteria, which actions the agent may take and how much it may spend. That contract is fixed before any work starts, and it is what the result is judged against later.",
-    stepTwoTitle: "The agent works inside the limits",
-    stepTwoBody:
-      "Loomrail starts the provider session, watches the spend and advances the workflow state itself. The provider’s output is treated as input to that state machine, never as the source of truth about progress.",
-    stepThreeTitle: "It stops and asks when it must",
-    stepThreeBody:
-      "When a decision needs a person, the agent raises a Human Request. The task blocks, the question stays attached to it, and your answer is recorded next to the work instead of scrolling away in a chat.",
-    stepFourTitle: "You accept the delivery, or send it back",
-    stepFourBody:
-      "The task arrives with its evidence: the changes, the review, the QA result and any follow-up work it created. You inspect it and decide. Nothing is committed, pushed or merged for you.",
-
-    chipReady: "Ready",
-    chipBlocked: "Blocked",
-    uiTaskTitle: "Persisted board integration",
-    uiTaskDesc:
-      "Verify project isolation, state transitions and activity through the authenticated local API.",
-    uiAcceptance: "Acceptance",
-    uiAcceptanceValue: "3 criteria",
-    uiAllowed: "Allowed actions",
-    uiAllowedValue: "Read, edit, run tests",
-    uiBudget: "Budget",
-    uiBudgetValue: "Bounded and reconciled",
-    flowBacklog: "Backlog",
-    flowReady: "Ready",
-    flowRunning: "Running",
-    flowReview: "Review",
-    flowDone: "Accepted",
-    uiWorkflowState: "Workflow state",
-    uiSpend: "Budget guard",
-    uiSpendValue: "Session limits + ledger",
-    uiProvider: "Provider",
-    uiProviderValue: "Local Codex or Claude",
-    uiSession: "Session",
-    uiSessionValue: "Restarted once, state kept",
-    uiRequestLabel: "Human Request",
-    uiQuestion:
-      "Should the migration drop the legacy sessions table, or keep it read-only until the next release?",
-    uiAnswer: "Answer",
-    uiReturn: "Return to work",
-    uiEvidence: "Evidence",
-    uiChanges: "Changes",
-    uiChangesValue: "Snapshot-bound diff",
-    uiReview: "Review",
-    uiReviewValue: "Current report attached",
-    uiQa: "QA",
-    uiQaValue: "Measured browser report attached",
-    uiAccept: "Accept delivery",
-
+      "The orchestrator is the workflow engine: it assigns stage roles, checks permissions and keeps durable state outside provider sessions.",
     installTitle: "Try Loomrail without giving it a repository.",
     installIntro:
       "The copy block makes the package and Chromium downloads explicit, then checks your local Codex or Claude Code CLI on loopback. Sign in through that CLI first and start in a new empty directory.",
@@ -136,7 +86,7 @@ const messages = {
       "Loomrail uses the local CLI's existing subscription login. A missing, incompatible or signed-out CLI blocks dispatch; Loomrail never asks for a provider API key.",
     runtimeLabel: "Runtime",
     runtimeValue: "Node.js 24.19–24.x",
-    networkLabel: "Network",
+    networkLabel: "Local interface",
     networkValue: "127.0.0.1 only",
     firstRunLabel: "First run",
     firstRunValue: "Local CLI preflight",
@@ -150,7 +100,7 @@ const messages = {
     todayProviders:
       "Codex CLI and Claude Code CLI adapters with fail-closed version/login checks and bounded workspace tools.",
     todayRecovery: "Restart recovery, Human Requests, budgets, evidence, and Decisions.",
-    todayRepo: "Repository registration, per-task worktrees, and change inspection.",
+    todayRepo: "Existing repositories, isolated worktrees, a TypeScript/Node starter and change inspection.",
     notYetTitle: "Not claimed yet",
     notCloud: "Cloud sync, remote access, mobile control, or team accounts.",
     notDesktop: "Windows/Linux live-provider support, automatic updates, or a desktop installer.",
@@ -174,6 +124,65 @@ const messages = {
     sourceTitle: "Source code",
     sourceBody: "Read it, build it, or open an issue on GitHub.",
 
+    heroPlatform: "Codex CLI + Claude Code · macOS Apple Silicon",
+    heroSource: "Explore the source →",
+    navStarters: "Starters",
+    routeCaption: "One task. Six stages. Open a stage to explore.",
+    routeNote: "Workflow guide, not a live run. Loomrail owns the transitions; agents supply the work.",
+    route0Title: "Understand the task",
+    route0Body:
+      "Clarify the goal, surface open questions and agree on acceptance criteria before implementation.",
+    route1Title: "Make the work explicit",
+    route1Body:
+      "Break the brief into tasks, dependencies and a verification plan. Keep scope and permissions attached to the work.",
+    route2Title: "Give the writer a bounded workspace",
+    route2Body:
+      "A coding agent edits inside the approved workspace. Changes and tool activity remain attached to the task.",
+    route3Title: "Get an independent review",
+    route3Body:
+      "A fresh reviewer examines the changes. Findings can send the task back for correction; the writer cannot approve itself.",
+    route4Title: "Check what actually works",
+    route4Body:
+      "Run approved project checks and measured browser scenarios. Keep reports and evidence tied to the current work.",
+    route5Title: "The final decision is yours",
+    route5Body:
+      "Inspect the acceptance package, accept the delivery or return it. An agent cannot accept its own work.",
+    howArchitecture: "How orchestration works →",
+    ownerTitle: "You set the direction",
+    ownerBody:
+      "Define the outcome, answer open questions, approve boundaries and accept or return the result.",
+    engineTitle: "Loomrail controls the workflow",
+    engineBody:
+      "Stage transitions, permissions, session limits, human requests and recovery belong to the local engine — not a model’s claim that it is done.",
+    workerTitle: "Codex and Claude execute",
+    workerBody:
+      "Planning, implementation, independent review and QA run through supported, authenticated local CLIs. Provider network connections remain with those CLIs.",
+    researchTitle: "Next: a code-blind planning model",
+    researchBody:
+      "Astra/Fable planning with Luna/Sonnet workers is being researched, not shipped. The manager would receive short reports, never repository files. Token savings still need a controlled evaluation.",
+    researchLink: "Read the design research →",
+    startersTitle: "Start with your code. Or a clean slate.",
+    startersIntro:
+      "Bring a repository, create a small TypeScript project or explore the workflow in a disposable demo.",
+    starterRecipe: "Built-in boilerplate · typescript-node@1",
+    starterNewTitle: "A starting point you can inspect.",
+    starterNewBody:
+      "Preview the files, confirm the destination and create a new Git repository with a Node ESM + TypeScript baseline. Your project stays ordinary code, with no Loomrail runtime dependency.",
+    starterNewLimit:
+      "One built-in recipe today. No template downloads, automatic dependency install, commits or pushes.",
+    starterRecipeLink: "Inspect the recipe →",
+    starterFiles: "Files you receive",
+    starterFilesNote: "Preview → your confirmation → new local project",
+    starterExistingTitle: "An existing repository",
+    starterExistingBody:
+      "Register your local Git repository. Start a bounded task in an isolated worktree and inspect its changes before accepting the delivery.",
+    starterExistingLink: "Bring your repository →",
+    starterDemoTitle: "A safe place to explore",
+    starterDemoBody:
+      "Use the guided /try route and bundled web-app/API examples before connecting your own code. Starting an agent still consumes provider quota.",
+    starterDemoLink: "Start the guided demo →",
+    footerClosing: "From a brief to a result you can inspect.",
+
     footerNavigation: "Footer navigation",
     footerTagline: "Local state. Human acceptance.",
     footerSource: "Source",
@@ -181,11 +190,11 @@ const messages = {
     footerDocs: "Docs",
   },
   ru: {
-    pageTitle: "Loomrail — задача не заканчивается вместе с чатом.",
+    pageTitle: "Loomrail — AI-команда. Результат под контролем.",
     metaDescription:
-      "Локальная панель управления работой AI-агентов: устойчивое состояние задач, контрольные точки, доказательства, бюджеты и приёмка владельцем.",
+      "Локальная оркестрация Codex и Claude: шесть этапов, независимое ревью, QA и TypeScript-бойлерплейт. Для macOS Apple Silicon.",
     ogDescription:
-      "Храните постановку, разрешённые действия, доказательства, бюджеты и решение владельца в одной локальной записи.",
+      "Подключите репозиторий или начните с TypeScript-шаблона. Планирование, код, ревью и проверки через локальные CLI. Результат принимаете вы.",
     skipLink: "К содержимому",
     primaryNavigation: "Основная навигация",
     homeLabel: "Главная Loomrail",
@@ -202,85 +211,35 @@ const messages = {
     switchToLight: "Переключить на светлую тему",
     switchToDark: "Переключить на тёмную тему",
 
-    heroTitle: "Задача не заканчивается вместе с чатом.",
+    heroTitle: "AI-команда. Результат под контролем.",
     heroBody:
-      "Локальная панель управления для AI-агентов, которые пишут код. Постановка, ограничения, открытые вопросы и финальное решение живут в одной устойчивой записи на вашей машине, а не в переписке, которая заканчивается вместе с сессией.",
-    heroPrimaryCta: "Установить и запустить",
-    heroSecondaryCta: "Как это работает",
-    heroNote: "Открытый исходный код · Apache-2.0 · Работает полностью на вашей машине",
-    promisesLabel: "Чего Loomrail не делает",
+      "Соберите Codex и Claude в один управляемый процесс: планирование, реализация в заданных границах, ревью и проверка результата. Финальное решение остаётся за вами.",
+    heroPrimaryCta: "Попробовать локально",
+    heroSecondaryCta: "Выбрать точку старта",
+    heroNote: "Открытый код · Apache-2.0 · Локальное состояние, ваши подписки CLI",
+    promisesLabel: "Контроль остаётся у вас",
     promiseCommit: "Не коммитит",
     promisePush: "Не пушит",
     promiseMerge: "Не мержит",
-    promiseDeploy: "Не деплоит",
+    promiseDeploy: "Без автодеплоя",
     promiseAccept: "Поставку принимаете вы",
 
-    whyTitle: "Чат — плохое место для задачи.",
+    whyTitle: "Задача не заканчивается вместе с чатом.",
     whyBody:
-      "Сессия заканчивается, процесс падает, провайдер меняется. Всё, что жило только в переписке, уходит вместе с ней. Loomrail выносит важное из разговора в запись, которой управляет детерминированный конечный автомат.",
+      "Сессии меняются, но постановка, вопросы и решения не теряются. Loomrail хранит работу локально: видно, что уже сделано и что требует вашего внимания.",
     whyOneTitle: "Устойчиво по умолчанию",
     whyOneBody:
-      "Состояние, запросы, бюджеты, доказательства и решения пишутся в локальный SQLite одной транзакцией. После перезапуска задача ровно там, где вы её оставили.",
-    whyTwoTitle: "Ограничено по проекту",
+      "Состояние, вопросы, отчёты и решения хранятся локально. После перезапуска можно восстановить записанный прогресс и увидеть прерванную работу без скрытого перезапуска агента.",
+    whyTwoTitle: "Понятные ограничения",
     whyTwoBody:
-      "У каждой задачи есть разрешённые действия и лимит трат. Агент работает внутри них, а повышение лимита — явное решение, которое записывается.",
+      "Задайте разрешённые действия и лимиты сессии, проверьте записанный расход и явно подтвердите увеличение. Учёт бюджета сверяется после сессии провайдера.",
     whyThreeTitle: "Владелец — вы",
     whyThreeBody:
-      "Агент никогда не закрывает свою задачу сам. Loomrail не коммитит, не пушит, не мержит и не деплоит. Поставку принимает или возвращает человек.",
+      "Агент не принимает собственную работу. Коммиты, push и merge остаются вашими действиями. Управляемый деплой требует отдельного допустимого плана и вашего подтверждения.",
 
-    howTitle: "Как задача проходит через Loomrail",
+    howTitle: "Агенты работают. Loomrail управляет процессом.",
     howIntro:
-      "Четыре шага, каждый раз одинаковых. Новые сессии идут через ваш авторизованный локальный Codex или Claude Code CLI; API-ключ Loomrail не передаётся.",
-    stepOneTitle: "Пишете задачу, а не промпт",
-    stepOneBody:
-      "Задача описывает результат, критерии приёмки, разрешённые действия и лимит трат. Этот контракт фиксируется до начала работы, и именно по нему потом оценивается результат.",
-    stepTwoTitle: "Агент работает внутри ограничений",
-    stepTwoBody:
-      "Loomrail запускает сессию провайдера, следит за тратами и сам двигает состояние workflow. Вывод провайдера — это вход для конечного автомата, а не источник истины о прогрессе.",
-    stepThreeTitle: "Останавливается и спрашивает, когда нужно",
-    stepThreeBody:
-      "Когда решение требует человека, агент создаёт Human Request. Задача блокируется, вопрос остаётся прикреплённым к ней, а ваш ответ записывается рядом с работой, а не уезжает вверх по переписке.",
-    stepFourTitle: "Вы принимаете поставку или возвращаете её",
-    stepFourBody:
-      "Задача приходит с доказательствами: изменения, ревью, результат QA и созданные ею последующие задачи. Вы смотрите и решаете. Ничего не коммитится, не пушится и не мержится за вас.",
-
-    chipReady: "Ready",
-    chipBlocked: "Blocked",
-    uiTaskTitle: "Persisted board integration",
-    uiTaskDesc:
-      "Проверить изоляцию проектов, переходы состояний и активность через аутентифицированный локальный API.",
-    uiAcceptance: "Приёмка",
-    uiAcceptanceValue: "3 критерия",
-    uiAllowed: "Разрешено",
-    uiAllowedValue: "Чтение, правки, тесты",
-    uiBudget: "Бюджет",
-    uiBudgetValue: "Ограничен и сверяется",
-    flowBacklog: "Backlog",
-    flowReady: "Ready",
-    flowRunning: "Running",
-    flowReview: "Review",
-    flowDone: "Accepted",
-    uiWorkflowState: "Состояние workflow",
-    uiSpend: "Бюджетный guard",
-    uiSpendValue: "Лимиты сессии + ledger",
-    uiProvider: "Провайдер",
-    uiProviderValue: "Локальный Codex или Claude",
-    uiSession: "Сессия",
-    uiSessionValue: "Перезапущена, состояние сохранено",
-    uiRequestLabel: "Human Request",
-    uiQuestion:
-      "Удалять ли в миграции старую таблицу sessions или оставить её только для чтения до следующего релиза?",
-    uiAnswer: "Ответить",
-    uiReturn: "Вернуть в работу",
-    uiEvidence: "Доказательства",
-    uiChanges: "Изменения",
-    uiChangesValue: "Diff привязан к snapshot",
-    uiReview: "Ревью",
-    uiReviewValue: "Актуальный отчёт приложен",
-    uiQa: "QA",
-    uiQaValue: "Измеренный browser-отчёт приложен",
-    uiAccept: "Принять поставку",
-
+      "Оркестратор здесь — движок workflow: он назначает роли на этапы, проверяет разрешения и хранит состояние вне сессий провайдеров.",
     installTitle: "Попробуйте Loomrail без доступа к репозиторию.",
     installIntro:
       "Copy-блок явно показывает загрузку пакета и Chromium, затем проверяет локальный Codex или Claude Code CLI на loopback. Сначала войдите через этот CLI и начните в новом пустом каталоге.",
@@ -300,9 +259,9 @@ const messages = {
       "Ответьте на Human Request, при необходимости подтвердите ограниченный бюджет реального провайдера, проверьте доступные свидетельства и решите сами.",
     installLive:
       "Loomrail использует существующий подписочный login локального CLI. Отсутствующий, несовместимый или неавторизованный CLI блокирует dispatch; provider API key не нужен.",
-    runtimeLabel: "Runtime",
+    runtimeLabel: "Среда запуска",
     runtimeValue: "Node.js 24.19–24.x",
-    networkLabel: "Сеть",
+    networkLabel: "Локальный интерфейс",
     networkValue: "Только 127.0.0.1",
     firstRunLabel: "Первый запуск",
     firstRunValue: "Preflight локального CLI",
@@ -316,7 +275,7 @@ const messages = {
     todayProviders:
       "Адаптеры Codex CLI и Claude Code CLI с fail-closed проверкой версии/login и ограниченными workspace tools.",
     todayRecovery: "Восстановление после перезапуска, Human Requests, бюджеты, доказательства и Decisions.",
-    todayRepo: "Регистрация репозитория, worktree на задачу и просмотр изменений.",
+    todayRepo: "Свои репозитории, отдельные worktree, TypeScript/Node-шаблон и просмотр изменений.",
     notYetTitle: "Пока не обещаем",
     notCloud: "Cloud sync, удалённый доступ, mobile control или командные аккаунты.",
     notDesktop: "Live-provider support на Windows/Linux, автоматические обновления или desktop installer.",
@@ -339,6 +298,64 @@ const messages = {
     architectureBody: "Владение доменом, persistence, providers и delivery.",
     sourceTitle: "Исходный код",
     sourceBody: "Прочитать, собрать или завести issue на GitHub.",
+
+    heroPlatform: "Codex CLI + Claude Code · macOS Apple Silicon",
+    heroSource: "Посмотреть исходники →",
+    navStarters: "Шаблоны",
+    routeCaption: "Одна задача. Шесть этапов. Раскройте любой.",
+    routeNote: "Схема процесса, не живой запуск. Этапами управляет Loomrail, работу выполняют агенты.",
+    route0Title: "Разобраться в задаче",
+    route0Body: "Уточнить цель, задать вопросы и согласовать критерии приёмки до начала реализации.",
+    route1Title: "Составить конкретный план",
+    route1Body:
+      "Разложить задачу на части, зависимости и проверки. Закрепить объём работы и разрешённые действия.",
+    route2Title: "Передать агенту ограниченную рабочую область",
+    route2Body:
+      "Агент пишет код в согласованной рабочей области. Изменения и действия инструментов остаются в истории задачи.",
+    route3Title: "Получить независимое ревью",
+    route3Body:
+      "Отдельный запуск ревьюера проверяет изменения. Замечания возвращают задачу на доработку; автор не одобряет собственный код.",
+    route4Title: "Проверить работающий результат",
+    route4Body:
+      "Выполнить согласованные проверки проекта и реальные браузерные сценарии. Сохранить отчёты, связанные с текущими изменениями.",
+    route5Title: "Решение остаётся за вами",
+    route5Body:
+      "Изучить пакет приёмки, принять результат или вернуть в работу. Агент не может принять собственную работу.",
+    howArchitecture: "Как устроена оркестрация →",
+    ownerTitle: "Вы задаёте направление",
+    ownerBody:
+      "Определяете результат, отвечаете на вопросы, утверждаете ограничения и принимаете работу — или возвращаете на доработку.",
+    engineTitle: "Loomrail управляет процессом",
+    engineBody:
+      "Переходы между этапами, разрешения, лимиты сессий, вопросы и восстановление контролирует локальный движок, а не сообщение модели «готово».",
+    workerTitle: "Codex и Claude выполняют работу",
+    workerBody:
+      "Планирование, реализация, независимое ревью и QA идут через поддерживаемые локальные CLI с вашим входом. Сетевые запросы к провайдерам выполняют эти CLI.",
+    researchTitle: "Дальше — планировщик без доступа к коду",
+    researchBody:
+      "Astra/Fable для планирования и Luna/Sonnet для исполнения — пока исследование, не готовый режим. Планировщик должен получать короткие отчёты, а не файлы репозитория. Экономию токенов ещё предстоит измерить.",
+    researchLink: "Исследование архитектуры →",
+    startersTitle: "Начните со своего кода. Или с чистого листа.",
+    startersIntro:
+      "Подключите репозиторий, создайте небольшой TypeScript-проект или изучите процесс на отдельном демо.",
+    starterRecipe: "Встроенный бойлерплейт · typescript-node@1",
+    starterNewTitle: "Стартовый проект без сюрпризов.",
+    starterNewBody:
+      "Посмотрите список файлов, подтвердите каталог и создайте новый Git-репозиторий на Node ESM + TypeScript. Это обычный код: для работы проекта Loomrail не нужен.",
+    starterNewLimit:
+      "Сейчас встроен один шаблон. Без скачивания шаблонов, автоматической установки зависимостей, коммитов и push.",
+    starterRecipeLink: "Посмотреть шаблон →",
+    starterFiles: "Что будет в проекте",
+    starterFilesNote: "Предпросмотр → ваше подтверждение → новый проект",
+    starterExistingTitle: "Уже есть репозиторий",
+    starterExistingBody:
+      "Подключите локальный Git-репозиторий. Запустите задачу в отдельном worktree и проверьте изменения перед приёмкой.",
+    starterExistingLink: "Подключить репозиторий →",
+    starterDemoTitle: "Хочется сначала попробовать",
+    starterDemoBody:
+      "Пройдите маршрут /try и примеры веб-приложения и API, не подключая свой код. Запуск агента всё равно расходует квоту провайдера.",
+    starterDemoLink: "Начать с демо →",
+    footerClosing: "От постановки — к проверяемому результату.",
 
     footerNavigation: "Навигация в подвале",
     footerTagline: "Локальное состояние. Приёмка человеком.",
@@ -566,50 +583,6 @@ function setupCopyButtons(doc: Document, win: Window): void {
   }
 }
 
-/** Walks the illustrated workflow pipeline so the "how it works" step shows movement, not a static diagram. */
-function setupFlow(doc: Document, win: Window): void {
-  const flow = doc.querySelector<HTMLElement>("[data-flow]");
-  if (flow === null) return;
-  const stages = [...flow.children];
-  if (stages.length === 0) return;
-
-  const reduced = win.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let current = reduced ? Math.min(2, stages.length - 1) : 0;
-  const paint = (): void => {
-    stages.forEach((stage, index) => {
-      stage.classList.toggle("is-current", index === current);
-    });
-  };
-
-  paint();
-  if (reduced) return;
-  win.setInterval(() => {
-    current = (current + 1) % stages.length;
-    paint();
-  }, 1700);
-}
-
-/** Progressive enhancement: sections stay visible unless the browser can observe and animate them. */
-function setupReveal(doc: Document, win: Window): void {
-  const targets = doc.querySelectorAll<HTMLElement>("[data-reveal]");
-  const observerFactory = Reflect.get(win, "IntersectionObserver") as typeof IntersectionObserver | undefined;
-  if (targets.length === 0 || observerFactory === undefined) return;
-  if (win.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-  doc.documentElement.dataset["motion"] = "ready";
-  const observer = new observerFactory(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        entry.target.classList.add("is-visible");
-        observer.unobserve(entry.target);
-      }
-    },
-    { rootMargin: "0px 0px -10% 0px", threshold: 0.05 },
-  );
-  for (const target of targets) observer.observe(target);
-}
-
 export function initializeLanding(doc: Document, win: Window): void {
   if (doc.documentElement.dataset["landingReady"] === "true") return;
   doc.documentElement.dataset["landingReady"] = "true";
@@ -617,8 +590,6 @@ export function initializeLanding(doc: Document, win: Window): void {
   setupLocale(doc, win);
   setupTheme(doc, win);
   setupCopyButtons(doc, win);
-  setupFlow(doc, win);
-  setupReveal(doc, win);
 }
 
 initializeLanding(document, window);
