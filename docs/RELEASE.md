@@ -1,7 +1,7 @@
 # Releasing the Loomrail launcher
 
-**Status:** `0.1.3` locally verified for macOS Apple Silicon; clean-source CI and publication pending. Public `latest` remains `0.1.1`; the older `0.1.2` stage is not a published release.
-**Updated:** 2026-09-19
+**Status:** `0.1.3` published for macOS Apple Silicon through `latest`; `next` remains `0.1.0-beta.1`. The older `0.1.2` was not published.
+**Updated:** 2026-09-20
 
 Loomrail ships as a single npm package named `loomrail`. It contains a bundled Node launcher, the prebuilt Workbench,
 the SQLite migrations and the bundled fixture projects. Consumers install one package and run one binary; they never
@@ -199,27 +199,26 @@ exact version and invocation contract inside the selected support target. The cu
 only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
 evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
-### Current candidate
+### Current published Stable release
 
-`0.1.3` is the repository-readiness patch candidate for `MACOS_ARM64`. It preserves all six stages,
+`0.1.3` is the published repository-readiness patch for `MACOS_ARM64`. It preserves all six stages,
 independent Review, measured verification and Browser QA, final owner Acceptance, audit, permissions and recovery.
 The implementation reduces duplicate workspace result delivery and optional context, adds bounded stage context
 and structured upstream checkpoints, and shows cache attribution with honest unknowns. Modeled byte reductions
 are not provider-token savings claims. It also includes the task-wide diagnostic activity feed and corrects invalid
-environment-override admission. See the [candidate notes](releases/0.1.3.md) and
+environment-override admission. See the [release notes](releases/0.1.3.md) and
 [token-efficiency evidence](evidence/phase-8/TOKEN-EFFICIENCY-EVIDENCE.md).
 
-Publishing remains gated on exact-source local/CI/package checks, protected-environment review and separate npm
-approval. The historical compatibility rows stay unchanged. No new CLI version is admitted by this patch.
-The separately staged `0.1.2` contains older bytes; its [historical receipt](evidence/phase-8/STABLE-0.1.2-CANDIDATE.json)
-must not be reused for `0.1.3` or presented as verification of the newer source.
-Before finishing a new publication, inspect the owner's npm staging queue and explicitly resolve the obsolete
-`0.1.2` candidate. Approving it after the newer release could move `latest` backwards. Do not reject or approve a
-stage merely from this historical record; verify its exact identity and use the owner's separate npm approval.
+Exact-source six-job CI, protected staging and separate owner WebAuthn approval completed for source
+`868be0ee9c2054cefeffda1ecc516c62ec2f8099`. Public tarball bytes match the CLEAN workflow receipt, and registry
+signature/provenance verification passed. See the [release evidence](evidence/phase-8/STABLE-0.1.3-RELEASE-EVIDENCE.md).
+The historical compatibility rows stay unchanged. No new CLI version is admitted by this patch, and the experimental
+code-blind coordinator in PR #33 is not included. The obsolete `0.1.2` stage was rejected before this publication;
+its [historical receipt](evidence/phase-8/STABLE-0.1.2-CANDIDATE.json) is not evidence for `0.1.3`.
 
-### Current published Stable release
+### Previous published Stable release
 
-`0.1.1` is the published `MACOS_ARM64` patch release. It adds the exact Codex CLI
+`0.1.1` was the preceding `MACOS_ARM64` patch release. It added the exact Codex CLI
 `0.154.0-alpha.6.2 / darwin / arm64` admission row after real success/failure recordings and a full production
 workflow, fixes finite Project verification Acceptance when a Plan also contains a supervised `SERVE` recipe, adds a
 repeatable public-registry lifecycle gate and extends the keyboard-first Attention E2E to three Projects. Local
@@ -229,10 +228,11 @@ workflow through `DONE / SUCCEEDED / ACCEPTED` and preserved that terminal state
 
 ### Published channels
 
-The registry serves Stable `0.1.1` through `latest` and keeps `0.1.0-beta.1` through `next`. Stable was built from
-exact source `7dcacc05509eb5fbbaa4114bed30da061a29910f`, passed the protected stage workflow and separate owner WebAuthn
-approval, and was then installed and exercised through a full accepted workflow from the public registry. Its
-sanitized proof is recorded in the
+The registry serves Stable `0.1.3` through `latest` and keeps `0.1.0-beta.1` through `next`. The current release was
+built from exact source `868be0ee9c2054cefeffda1ecc516c62ec2f8099`; its checks are recorded in the
+[0.1.3 release evidence](evidence/phase-8/STABLE-0.1.3-RELEASE-EVIDENCE.md).
+The earlier full accepted provider workflow belongs to `0.1.1`, not to a new paid run for `0.1.3`. Its historical
+proof is recorded in the
 [Stable release evidence](evidence/phase-8/STABLE-0.1.1-RELEASE-EVIDENCE.md) and
 [Stable release notes](releases/0.1.1.md). The historical `0.1.0` proof remains in
 [Stable 0.1.0 release evidence](evidence/phase-8/STABLE-0.1.0-RELEASE-EVIDENCE.md). The Beta proof remains in the
@@ -253,8 +253,8 @@ can make those bytes public. Neither command belongs on a maintainer laptop as a
 After publishing, verify the registry rather than the local tarball:
 
 ```bash
-npm view loomrail@0.1.1 name version dist.integrity --json
-npm install --ignore-scripts loomrail@0.1.1
+npm view loomrail@0.1.3 name version dist.integrity --json
+npm install --ignore-scripts loomrail@0.1.3
 npm audit signatures
 npx loomrail --no-open --port 4176
 ```
