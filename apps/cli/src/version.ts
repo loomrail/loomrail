@@ -1,1 +1,1 @@
-export const LOOMRAIL_VERSION = "0.1.3";
+export const LOOMRAIL_VERSION = "0.2.0";

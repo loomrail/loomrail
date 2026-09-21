@@ -14,6 +14,9 @@ implementation plans.
   provider quota. Provider allowance is separate from Loomrail budgets; unsupported reporting remains unavailable.
 - Private multi-task dogfood, package integrity/provenance and clean install/backup/restore evidence for the declared
   support target. See the [release record](docs/RELEASE.md) for published versions versus pending candidates.
+- An opt-in, experimental code-blind planning coordinator, from `0.2.0`, that plans from a separate owner-written outcome and closed
+  progress facts, with no repository, workspace, network or tool access. Workers keep all repository work, and every
+  gate above still applies. It is off by default and claims no measured saving.
 
 ## Now — maintain the proven local delivery loop
 
@@ -26,9 +29,10 @@ implementation plans.
 
 ## Next — connect the proven loop to normal repository delivery
 
-- Evaluate an opt-in strong planner with no code access and bounded Luna/Sonnet workers. This is a
-  [researched proposal](docs/research/code-blind-orchestrator-primary-sources.ru.md), not a shipped mode or a measured
-  token-saving claim; implementation needs its own product decision, security boundary and quality evaluation.
+- Measure whether the opt-in code-blind planner is worth its cost. The mode itself now exists behind an explicit
+  opt-in, with its own product decision, security boundary and native qualification, but no token saving and no
+  quality non-inferiority has been measured. A same-task paired benchmark needs its own budget and decision before
+  any such claim is made.
 - Prove one owner-approved, one-shot GitHub Actions Guided Deploy against an exact clean Release, then require an
   environment-bound successful Preview before Production while keeping deployment secrets and operational procedure
   inside repository-owned workflows.

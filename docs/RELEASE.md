@@ -199,6 +199,24 @@ exact version and invocation contract inside the selected support target. The cu
 only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
 evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
+### Current candidate
+
+`0.2.0` is the coordinator candidate for `MACOS_ARM64`, and a minor rather than patch version because it adds an
+opt-in execution mode `0.1.3` did not have. It preserves all six stages, independent Review, measured verification
+and Browser QA, final owner Acceptance, audit, permissions and recovery. It adds the opt-in code-blind planning
+coordinator, admits the exact Codex CLI `0.155.0-alpha.9.2 / darwin / arm64` execution target, stops a read-only
+Discovery stage from asking for write authority, and narrows session-loop bookkeeping to operational counters.
+See the [candidate notes](releases/0.2.0.md), [ADR-0035](adr/0035-code-blind-coordinator.md) and the
+[coordinator evidence](evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
+
+The coordinator is experimental and opt-in. No token saving or quality non-inferiority is claimed, and the exact
+admission grants nothing to allowance reporting, an adjacent CLI version, another architecture or another platform.
+This release adds no migration: `0062` remains the latest, and stage assignments gain only additive optional fields.
+
+Publishing remains gated on exact-source local, CI and package checks, protected-environment review and separate npm
+approval. Publication must not reuse any earlier candidate's receipt. Before finishing it, inspect the owner's npm
+staging queue and resolve any obsolete candidate: approving an older stage afterwards could move `latest` backwards.
+
 ### Current published Stable release
 
 `0.1.3` is the published repository-readiness patch for `MACOS_ARM64`. It preserves all six stages,
