@@ -86,6 +86,41 @@ test.describe("protected landing canonical activation", () => {
     await expect(page).toHaveURL(/#main$/);
   });
 
+  test("explores all six stages by keyboard without starting a provider", async ({ page }) => {
+    const route = page.locator(".route-stage");
+    await expect(route).toHaveCount(6);
+    for (let index = 0; index < 6; index += 1) {
+      const stage = route.nth(index);
+      const summary = stage.locator("summary");
+      await summary.focus();
+      await expect(summary).toBeFocused();
+      expect(await summary.evaluate((node) => getComputedStyle(node).outlineStyle)).not.toBe("none");
+      if (!(await stage.evaluate((node) => node.hasAttribute("open")))) await summary.press("Enter");
+      await expect(stage.locator(".route-detail")).toBeVisible();
+      await summary.press("Enter");
+      await expect(stage.locator(".route-detail")).toBeHidden();
+    }
+    await page.getByRole("button", { name: "Switch to Russian" }).click();
+    await expect(page.locator('[data-i18n="researchBody"]')).toContainText(
+      "пока исследование, не готовый режим",
+    );
+    await expect(page.locator('[data-i18n="starterNewLimit"]')).toContainText("один шаблон");
+    await expect(page.locator('[data-i18n="routeNote"]')).toContainText("не живой запуск");
+  });
+
+  test("keeps content readable with reduced motion and doubled text size", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.getByRole("button", { name: "Switch to Russian" }).click();
+    await page.getByRole("button", { name: "Переключить на тёмную тему" }).click();
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    await expect(page.locator(".route-stage").first().locator(".route-detail")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator("html").evaluate((node) => getComputedStyle(node).scrollBehavior)).toBe("auto");
+  });
+
   for (const width of [320, 375, 414, 768]) {
     test(`has no page overflow at ${width.toString()}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 844 });
@@ -96,6 +131,16 @@ test.describe("protected landing canonical activation", () => {
       }));
       expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
       await expect(page.locator("[data-install-commands]")).toBeVisible();
+      for (const locale of ["en", "ru"]) {
+        if (locale === "ru") await page.getByRole("button", { name: "Switch to Russian" }).click();
+        for (const theme of ["light", "dark"]) {
+          if (theme === "dark") await page.locator("[data-theme-toggle]").click();
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await expect(page.locator(".route-map")).toBeVisible();
+          await expect(page.locator(".starter-feature")).toBeVisible();
+        }
+        await page.locator("[data-theme-toggle]").click();
+      }
     });
   }
 });

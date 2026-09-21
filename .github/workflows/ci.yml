@@ -26,7 +26,9 @@ jobs:
     # Windows runs the explicit process, Q17 and fault-injection gates before repository-wide verify.
     # Keep the job cap above that intentional sequential matrix; individual process and test
     # deadlines remain the hang detectors.
-    timeout-minutes: 40
+    # Main run 35442835671 reached active daemon tests at 40m and was killed by the job cap.
+    # Windows needs headroom for this sequential suite; macOS retains its existing ceiling.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 40 }}
 
     steps:
       - name: Check out repository

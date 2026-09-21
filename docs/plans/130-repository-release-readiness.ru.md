@@ -2,8 +2,11 @@
 
 **Дата:** 2026-09-19
 
-**Статус:** локальные исправления и проверки завершены; владелец разрешил commit/push, защиту main и выпуск 0.1.3;
-exact-source CI и publication gates ещё не завершены.
+**Статус:** 0.1.3 опубликован 2026-09-20 после exact-source CI, protected staging и отдельного owner WebAuthn;
+публичная установка, подписи, происхождение, обновление и восстановление проверены.
+
+Итог: [Stable 0.1.3 release evidence](../evidence/phase-8/STABLE-0.1.3-RELEASE-EVIDENCE.md).
+Наблюдения локальной подготовки ниже сохранены как история, а не текущий publication status.
 
 ## Scope
 
