@@ -8,6 +8,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readCodexAllowance } from "../src/index.js";
 
 const fixturePath = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-app-server.mjs");
+
+// Every fixture spawns a real `node`, so the read deadline has to outlast a cold child start on a
+// loaded host. Except where the timeout itself is the subject, the deadline here is scaffolding:
+// these tests assert parsing, projection and redaction, never how fast the reader gives up. A tight
+// value made them fail as PROVIDER_TIMEOUT under parallel load while the reader was behaving
+// correctly. Vitest's own per-test timeout still catches a genuine hang.
+const SCAFFOLD_DEADLINE_MS = 30_000;
+// The stubborn child can only ignore SIGTERM once Node has booted it and run its handler. The
+// deadline must therefore clear that start, or the signal lands on a process still using the
+// default action and the escalation branch never runs.
+const STUBBORN_DEADLINE_MS = 2_000;
+const STUBBORN_GRACE_MS = 80;
 const now = () => new Date("2026-09-04T20:00:00.000Z");
 const temporaryDirectories: string[] = [];
 
@@ -19,7 +31,7 @@ const readFixture = (
     command: process.execPath,
     commandArgsPrefix: [fixturePath, mode, options.logPath ?? ""],
     now,
-    deadlineMs: options.deadlineMs ?? 1_000,
+    deadlineMs: options.deadlineMs ?? SCAFFOLD_DEADLINE_MS,
     terminationGraceMs: options.terminationGraceMs ?? 50,
   });
 
@@ -87,7 +99,9 @@ describe("Codex allowance App Server reader", () => {
   ] as const)("fails closed for %s", async (mode, unavailableReason) => {
     // Process startup can exceed 100 ms on a loaded CI host. Only the timeout fixture needs the
     // short clock; every immediate-response fixture gets enough time to prove its intended branch.
-    await expect(readFixture(mode, { deadlineMs: mode === "timeout" ? 100 : 1_000 })).resolves.toMatchObject({
+    await expect(
+      readFixture(mode, { deadlineMs: mode === "timeout" ? 100 : SCAFFOLD_DEADLINE_MS }),
+    ).resolves.toMatchObject({
       freshness: "UNAVAILABLE",
       unavailableReason,
       buckets: [],
@@ -95,13 +109,33 @@ describe("Codex allowance App Server reader", () => {
   });
 
   it("escalates a child that ignores graceful termination and waits for its real exit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "loomrail allowance signals Пример "));
+    temporaryDirectories.push(directory);
+    const logPath = join(directory, "signal log.jsonl");
     const startedAt = Date.now();
     await expect(
-      readFixture("timeout-stubborn", { deadlineMs: 150, terminationGraceMs: 80 }),
+      readFixture("timeout-stubborn", {
+        logPath,
+        deadlineMs: STUBBORN_DEADLINE_MS,
+        terminationGraceMs: STUBBORN_GRACE_MS,
+      }),
     ).resolves.toMatchObject({ unavailableReason: "PROVIDER_TIMEOUT" });
-    // Windows does not deliver a catchable SIGTERM to a child: Node terminates it immediately.
-    // POSIX exercises the grace-period escalation; both branches still resolve only after close.
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(process.platform === "win32" ? 140 : 210);
+    const elapsedMs = Date.now() - startedAt;
+    if (process.platform === "win32") {
+      // Windows delivers no catchable SIGTERM: Node terminates the child at once, so the grace
+      // period is unobservable and only the deadline itself can be asserted.
+      expect(elapsedMs).toBeGreaterThanOrEqual(STUBBORN_DEADLINE_MS - 10);
+      return;
+    }
+    // The child logging the signal is the direct evidence that it received SIGTERM and stayed
+    // alive, which is what makes the following elapsed time the grace period rather than a child
+    // that simply died on the default action.
+    const logged = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    expect(logged).toContainEqual({ ignoredSignal: "SIGTERM" });
+    expect(elapsedMs).toBeGreaterThanOrEqual(STUBBORN_DEADLINE_MS + STUBBORN_GRACE_MS - 20);
   });
 
   it("maps an unlaunchable command to unavailable instead of rejecting", async () => {
