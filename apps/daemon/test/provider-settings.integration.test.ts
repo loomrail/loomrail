@@ -69,6 +69,33 @@ describe("real provider settings API", () => {
     updatedAt: "2026-09-06T00:00:00.000Z",
   });
 
+  it("pins coordinator Codex without fallback and fails closed under a conflicting environment override", async () => {
+    for (const ready of [true, false]) {
+      for (const env of [{}, { LOOMRAIL_PROVIDER: "CLAUDE_CODE" }, { LOOMRAIL_PROVIDER: "unknown" }]) {
+        const registry = createProviderRegistry({
+          env,
+          adapters: { CODEX: inertAdapter("CODEX"), CLAUDE_CODE: inertAdapter("CLAUDE_CODE") },
+          probeAuthentication: () => Promise.resolve("AUTHENTICATED"),
+          probeRuntime: (provider) =>
+            Promise.resolve({
+              installed: true,
+              compatibility: provider === "CODEX" && !ready ? "UNVERIFIED" : "VERIFIED",
+              version: "0.153.4",
+            }),
+        });
+        await registry.refresh();
+        const selected = registry.resolve(
+          { ...project(), providerPreference: "CLAUDE_CODE" },
+          { stage: "PLAN", requiredProvider: "CODEX" },
+        );
+        expect(selected.adapter.capabilities()).toMatchObject({
+          provider: "CODEX",
+          start: ready && !("LOOMRAIL_PROVIDER" in env),
+        });
+      }
+    }
+  });
+
   it("lists only local Codex and Claude and selects a ready CLI adapter", async () => {
     const registry = createProviderRegistry({
       env: {},

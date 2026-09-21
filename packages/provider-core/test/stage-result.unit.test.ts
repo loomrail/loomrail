@@ -219,6 +219,8 @@ describe("provider stage result contract", () => {
       expect(jsonSchema, stage).toContain("Loomrail owns stage transitions and the acceptance gate");
       expect(jsonSchema, stage).toContain("Never use this result for a progress update");
       expect(jsonSchema, stage).toContain("If no owner input is needed, this result is invalid");
+      expect(jsonSchema, stage).toContain("Never request tools, permissions, workspace write authority");
+      expect(jsonSchema, stage).toContain("Loomrail grants each later stage its own bounded authority");
       expect(jsonSchema, stage).toContain("Do not return until the current stage is complete");
     }
   });

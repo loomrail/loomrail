@@ -94,6 +94,12 @@ production workflow. The full path included bounded workspace MCP calls, a measu
 QA, controlled restart and owner Acceptance. It did not infer compatibility for another version, allowance reader,
 OS or architecture, and it retained no raw product-session stream.
 
+The code-blind qualification on 2026-09-20 later admitted the separate exact Codex CLI
+`0.155.0-alpha.9.2 / darwin / arm64` execution target after an owner-bounded production run completed all six stages,
+workspace/MCP allow-deny enforcement, semantic failure and bounded resume, controlled restart, independent Review,
+measured QA and owner Acceptance. The owner confirmed this admission separately after the qualification. It does not
+admit allowance reporting, another CLI version, OS or architecture, and raw runtime artifacts remain outside Git.
+
 ## Consequences
 
 - A user installs and signs in to the official CLI once; Loomrail discovers and reuses that login automatically.

@@ -1081,13 +1081,14 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
     projectId: string,
     stage?: WorkflowStage,
     avoidProvider?: ProviderId | null,
+    requiredProvider?: "CODEX" | "CLAUDE_CODE",
   ) => {
     if (fixedProviderAdapter !== undefined) return fixedProviderAdapter;
     const result = localState.query({ type: "GET_PROJECT", projectId });
     if (result.type !== "PROJECT" || result.project === null) {
       throw new StateStoreError("PROJECT_NOT_FOUND", "The Project does not exist");
     }
-    return providerRegistry.resolve(result.project, { stage, avoidProvider }).adapter;
+    return providerRegistry.resolve(result.project, { stage, avoidProvider, requiredProvider }).adapter;
   };
 
   // Startup has to report what AUTO means even before the first Project is registered. This value
@@ -4594,6 +4595,7 @@ export const startDaemon = async (options: StartDaemonOptions): Promise<RunningD
             workItemId: params.workItemId,
             expectedVersion: body.expectedVersion,
             template: deliveryTemplate,
+            ...(body.orchestration === undefined ? {} : { orchestration: body.orchestration }),
             budget: {
               maxEstimatedTokens: body.maxEstimatedTokens ?? DEFAULT_PROVIDER_TOKEN_BUDGET,
               warningThresholds: [...DEFAULT_BUDGET_THRESHOLDS],

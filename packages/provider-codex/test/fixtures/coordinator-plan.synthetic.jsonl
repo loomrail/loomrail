@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"synthetic-coordinator-no-live-model"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"synthetic-plan","type":"agent_message","text":"{\"result\":{\"type\":\"PLAN\",\"orders\":[{\"outcome\":\"Make task progress visible to the owner\",\"verification\":\"Verify the requested result with independent checks\",\"dependsOn\":[],\"stopCondition\":\"VERIFICATION_FAILED\"}]}}"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":80,"reasoning_output_tokens":20}}

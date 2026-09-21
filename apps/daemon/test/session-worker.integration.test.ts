@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { WorkflowTemplate } from "@loomrail/contracts";
 import { openLocalState, type LocalState } from "@loomrail/persistence-sqlite";
 import type { ProviderAdapter, ProviderInvocation } from "@loomrail/provider-core";
+import { decodeProviderStageResult, renderProviderInvocationPrompt } from "@loomrail/provider-core";
 import { createProviderTestDouble, recordImplementationEffectInState } from "./provider-double.js";
 import { deliveryTemplate } from "@loomrail/workflow-engine";
 import { summariseChanges } from "@loomrail/workspace";
@@ -480,319 +481,447 @@ describe("session worker", () => {
     expect(settled).toBe(true);
   }, 20_000);
 
-  it("drives a CODEX-shaped real-repository route to the owner acceptance gate", async () => {
-    const localState = state();
-    await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
-    const seenStages: ProviderInvocation["session"]["stage"][] = [];
-    const seenHumanRequestPolicies: ProviderInvocation["humanRequests"][] = [];
-    let discoveryResumeContext = "";
-    let acceptanceHadWorkspace = true;
-    let acceptanceModelTier: ProviderInvocation["modelTier"] | undefined;
-    let acceptanceAgentRunId: string | undefined;
-    let acceptanceWorkspaceLeaseHolder: string | null | undefined;
-    let projectVerificationReady = false;
-    const projectVerificationTrees: string[] = [];
-    const adapter: ProviderAdapter = {
-      capabilities: () => ({
-        provider: "CODEX",
-        start: true,
-        interrupt: true,
-        eventStream: false,
-        usageReporting: true,
-        contextWindowReporting: false,
-        checkpointOnRequest: false,
-        contextWindowTokens: 128_000,
-        stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
-        costReporting: false,
-        tokenBudgetEnforcement: "HARD",
-      }),
-      start: async (invocation, listener) => {
-        const stage = invocation.session.stage;
-        seenStages.push(stage);
-        seenHumanRequestPolicies.push(invocation.humanRequests);
-        if (stage === "DISCOVERY" && invocation.dispatch.mode === "RESUME") {
-          discoveryResumeContext = invocation.contextPack.text;
-        }
-        if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
-          return {
-            type: "NEEDS_HUMAN",
-            request: {
-              kind: "SINGLE_CHOICE",
-              blocking: true,
-              title: "Choose the compatibility target",
-              context: "The synthetic repository supports one bounded target at a time.",
-              recommendation: "Keep the existing target.",
-              options: [
+  it.each([
+    { codeBlind: false, questionCount: 0 },
+    { codeBlind: true, questionCount: 2 },
+    { codeBlind: true, questionCount: 50 },
+  ])(
+    "drives a CODEX-shaped real-repository route to the owner acceptance gate (%j)",
+    async ({ codeBlind, questionCount }) => {
+      const backingState = state();
+      const coordinatorQueries: string[] = [];
+      const localState: LocalState = {
+        ...backingState,
+        query: (query) => {
+          if (query.type === "READ_COORDINATOR_CONTEXT") coordinatorQueries.push(query.stageAttemptId);
+          if (codeBlind && query.type === "READ_CONTEXT_SOURCES") {
+            const runs = backingState.query({ type: "LIST_AGENT_RUNS" });
+            if (runs.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+            const run = runs.runs.find(({ stageAttemptId }) => stageAttemptId === query.stageAttemptId);
+            if (run?.policySnapshot?.execution?.kind === "CODE_BLIND_MANAGER") {
+              throw new Error("A coordinator must never load source-bearing context");
+            }
+          }
+          return backingState.query(query);
+        },
+      };
+      await makeThrowawayRepo(join(temporaryDirectory, "project-web"));
+      const seenStages: ProviderInvocation["session"]["stage"][] = [];
+      const seenHumanRequestPolicies: ProviderInvocation["humanRequests"][] = [];
+      let discoveryResumeContext = "";
+      let acceptanceHadWorkspace = true;
+      let acceptanceModelTier: ProviderInvocation["modelTier"] | undefined;
+      let acceptanceAgentRunId: string | undefined;
+      let acceptanceWorkspaceLeaseHolder: string | null | undefined;
+      let projectVerificationReady = false;
+      const projectVerificationTrees: string[] = [];
+      const adapter: ProviderAdapter = {
+        capabilities: () => ({
+          provider: "CODEX",
+          start: true,
+          interrupt: true,
+          eventStream: false,
+          usageReporting: true,
+          contextWindowReporting: false,
+          checkpointOnRequest: false,
+          contextWindowTokens: 128_000,
+          stages: ["DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "QA", "ACCEPTANCE"],
+          costReporting: false,
+          tokenBudgetEnforcement: "HARD",
+        }),
+        start: async (invocation, listener) => {
+          const stage = invocation.session.stage;
+          if (codeBlind) expect(invocation.modelId).toBe(stage === "PLAN" ? "gpt-6-astra" : "gpt-5.6-luna");
+          seenStages.push(stage);
+          seenHumanRequestPolicies.push(invocation.humanRequests);
+          if (stage === "DISCOVERY" && invocation.dispatch.mode === "RESUME") {
+            discoveryResumeContext = invocation.contextPack.text;
+          }
+          if (stage === "DISCOVERY" && invocation.dispatch.mode === "START") {
+            return {
+              type: "NEEDS_HUMAN",
+              request: {
+                kind: "SINGLE_CHOICE",
+                blocking: true,
+                title: "Choose the compatibility target",
+                context: "The synthetic repository supports one bounded target at a time.",
+                recommendation: "Keep the existing target.",
+                options: [
+                  {
+                    id: "existing-target",
+                    label: "Existing target",
+                    consequence: "Implement the smallest compatible change.",
+                    recommended: true,
+                  },
+                ],
+                allowOther: false,
+              },
+            };
+          }
+          if (stage === "PLAN" && codeBlind) {
+            expect(invocation.workspace).toBeUndefined();
+            expect(invocation.workspaceTools).toBeUndefined();
+            expect(invocation.mcpConnections).toEqual([]);
+            expect(invocation.contextPack.text).not.toContain("durable handoff canary");
+            expect(invocation.contextPack.text).not.toContain("Choose the compatibility target");
+            expect(invocation.contextPack.text).not.toContain("Carry a stage attempt");
+            expect(invocation.contextPack.text).not.toContain("SOURCE_CANARY");
+            expect(renderProviderInvocationPrompt(invocation)).toContain(
+              "Loomrail code-blind coordinator v1",
+            );
+            expect(invocation.coordinator).toMatchObject({
+              discovery: "COMPLETED",
+              unresolvedQuestions: Math.min(20, questionCount),
+              ownerOutcome: "Deliver the approved outcome with independent checks.",
+            });
+            const facts = localState.query({
+              type: "READ_COORDINATOR_CONTEXT",
+              stageAttemptId: invocation.session.stageAttemptId,
+            });
+            expect(facts).toEqual({
+              type: "COORDINATOR_CONTEXT",
+              discoveryCheckpoint: { id: expect.any(String) as unknown, version: 1 },
+              unresolvedQuestions: Math.min(20, questionCount),
+            });
+            const discoveryAttempt = snapshotOf(
+              localState,
+              invocation.dispatch.workItemId,
+            ).stageAttempts.find(({ stage }) => stage === "DISCOVERY");
+            if (!discoveryAttempt) throw new Error("Expected Discovery");
+            const history = localState.query({
+              type: "LIST_PROVIDER_SESSIONS",
+              stageAttemptId: discoveryAttempt.id,
+            });
+            if (history.type !== "PROVIDER_SESSIONS") throw new Error("Expected Discovery history");
+            expect(facts).toMatchObject({ discoveryCheckpoint: { id: history.checkpoints.at(-1)?.id } });
+            expect(() =>
+              localState.query({ type: "READ_COORDINATOR_CONTEXT", stageAttemptId: discoveryAttempt.id }),
+            ).toThrow();
+            const workspace = localState.query({
+              type: "GET_WORKSPACE_BY_WORK_ITEM",
+              workItemId: invocation.dispatch.workItemId,
+            });
+            expect(workspace.type === "WORKSPACE" ? workspace.workspace?.leaseHolder : undefined).toBeNull();
+            const decoded = decodeProviderStageResult(
+              "PLAN",
+              {
+                result: {
+                  type: "PLAN",
+                  orders: [
+                    {
+                      outcome: "PLAN durable handoff canary: deliver the approved result",
+                      verification: "Run the owner-approved independent checks",
+                      dependsOn: [],
+                      stopCondition: "VERIFICATION_FAILED",
+                    },
+                  ],
+                },
+              },
+              { humanRequests: "DISALLOWED", codeBlindCoordinator: true },
+            );
+            if (decoded?.checkpoint === null || decoded === null) throw new Error("Expected bounded plan");
+            listener.onCheckpoint(decoded.checkpoint);
+            return decoded.outcome;
+          }
+          if (stage === "PLAN")
+            expect(invocation.contextPack.text).toContain("DISCOVERY durable handoff canary");
+          if (stage === "IMPLEMENT") {
+            expect(invocation.contextPack.text).toContain("PLAN durable handoff canary");
+            if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
+            recordImplementationEffectInState(localState, invocation);
+            await writeFile(
+              join(invocation.workspace.path, "d2-live-result.txt"),
+              "A live-shaped implementation changed this real Git worktree.\n",
+              "utf8",
+            );
+          }
+          if (stage === "REVIEW") {
+            expect(invocation.contextPack.text).not.toContain("durable handoff canary");
+            return {
+              type: "COMPLETED",
+              summary: "The independent review passed.",
+              artifacts: [
                 {
-                  id: "existing-target",
-                  label: "Existing target",
-                  consequence: "Implement the smallest compatible change.",
-                  recommended: true,
+                  kind: "REVIEW_REPORT",
+                  title: "Independent live-shaped review",
+                  summary: "The bounded worktree change matches the recorded decision.",
+                  checks: ["Decision traced", "Changed path reviewed"],
                 },
               ],
-              allowOther: false,
-            },
-          };
-        }
-        if (stage === "PLAN")
-          expect(invocation.contextPack.text).toContain("DISCOVERY durable handoff canary");
-        if (stage === "IMPLEMENT") {
-          expect(invocation.contextPack.text).toContain("PLAN durable handoff canary");
-          if (!invocation.workspace) throw new Error("IMPLEMENT must receive its worktree");
-          recordImplementationEffectInState(localState, invocation);
-          await writeFile(
-            join(invocation.workspace.path, "d2-live-result.txt"),
-            "A live-shaped implementation changed this real Git worktree.\n",
-            "utf8",
-          );
-        }
-        if (stage === "REVIEW") {
-          expect(invocation.contextPack.text).not.toContain("durable handoff canary");
-          return {
-            type: "COMPLETED",
-            summary: "The independent review passed.",
-            artifacts: [
-              {
+              reviewReport: {
                 kind: "REVIEW_REPORT",
                 title: "Independent live-shaped review",
                 summary: "The bounded worktree change matches the recorded decision.",
                 checks: ["Decision traced", "Changed path reviewed"],
+                verdict: "PASSED",
+                findings: [],
               },
-            ],
-            reviewReport: {
-              kind: "REVIEW_REPORT",
-              title: "Independent live-shaped review",
-              summary: "The bounded worktree change matches the recorded decision.",
-              checks: ["Decision traced", "Changed path reviewed"],
-              verdict: "PASSED",
-              findings: [],
-            },
-          };
-        }
-        if (stage === "QA") {
-          return {
-            type: "COMPLETED",
-            summary: "The bounded QA pass completed.",
-            artifacts: [
-              {
-                kind: "QA_REPORT",
-                title: "Live-shaped QA",
-                summary: "The synthetic acceptance check passed.",
-                checks: ["Expected file exists", "Expected content recorded"],
-              },
-            ],
-          };
-        }
-        if (stage === "ACCEPTANCE") {
-          acceptanceHadWorkspace = "workspace" in invocation;
-          acceptanceModelTier = invocation.modelTier;
-          const active = localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
-          acceptanceAgentRunId =
-            active.type === "AGENT_RUNS"
-              ? active.runs.find(({ stageAttemptId }) => stageAttemptId === invocation.session.stageAttemptId)
-                  ?.id
-              : undefined;
-          const workspace = localState.query({
-            type: "GET_WORKSPACE_BY_WORK_ITEM",
-            workItemId: seeded.workItemId,
-          });
-          acceptanceWorkspaceLeaseHolder =
-            workspace.type === "WORKSPACE" ? workspace.workspace?.leaseHolder : undefined;
-          listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
-          const acceptanceInput = invocation.acceptanceInput;
-          const reviewCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "REVIEW_REPORT").at(-1)
-            ?.checks[0];
-          const qaCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)
-            ?.checks[0];
-          if (!acceptanceInput || !reviewCheck || !qaCheck) {
-            throw new Error("Acceptance requires current criteria and evidence checks");
+            };
+          }
+          if (stage === "QA") {
+            return {
+              type: "COMPLETED",
+              summary: "The bounded QA pass completed.",
+              artifacts: [
+                {
+                  kind: "QA_REPORT",
+                  title: "Live-shaped QA",
+                  summary: "The synthetic acceptance check passed.",
+                  checks: ["Expected file exists", "Expected content recorded"],
+                },
+              ],
+            };
+          }
+          if (stage === "ACCEPTANCE") {
+            acceptanceHadWorkspace = "workspace" in invocation;
+            acceptanceModelTier = invocation.modelTier;
+            const active = localState.query({ type: "LIST_AGENT_RUNS", status: "RUNNING" });
+            acceptanceAgentRunId =
+              active.type === "AGENT_RUNS"
+                ? active.runs.find(
+                    ({ stageAttemptId }) => stageAttemptId === invocation.session.stageAttemptId,
+                  )?.id
+                : undefined;
+            const workspace = localState.query({
+              type: "GET_WORKSPACE_BY_WORK_ITEM",
+              workItemId: seeded.workItemId,
+            });
+            acceptanceWorkspaceLeaseHolder =
+              workspace.type === "WORKSPACE" ? workspace.workspace?.leaseHolder : undefined;
+            listener.onUsage({ inputTokens: 40, outputTokens: 20, quality: "ACTUAL" });
+            const acceptanceInput = invocation.acceptanceInput;
+            const reviewCheck = acceptanceInput?.evidence
+              .filter(({ kind }) => kind === "REVIEW_REPORT")
+              .at(-1)?.checks[0];
+            const qaCheck = acceptanceInput?.evidence.filter(({ kind }) => kind === "QA_REPORT").at(-1)
+              ?.checks[0];
+            if (!acceptanceInput || !reviewCheck || !qaCheck) {
+              throw new Error("Acceptance requires current criteria and evidence checks");
+            }
+            return {
+              type: "READY_FOR_ACCEPTANCE",
+              releaseNote: "Adds the bounded D2 result after Review and QA.",
+              verifyInstructions: ["Inspect d2-live-result.txt in the worktree."],
+              criteria: acceptanceInput.criteria.map((criterion) => ({
+                criterion,
+                implementation: "The bounded D2 result was written to the leased worktree.",
+                reviewCheck,
+                qaCheck,
+                ownerVerification: "Inspect d2-live-result.txt in the worktree.",
+                knownRisk: null,
+              })),
+            };
+          }
+          if (stage === "DISCOVERY" || stage === "PLAN") {
+            listener.onCheckpoint({
+              summary: `${stage} durable handoff canary`,
+              completed: ["Read relevant files"],
+              remaining: ["Next stage"],
+              deadEnds: [],
+              openQuestions: Array.from(
+                { length: questionCount },
+                (_, index) => `SOURCE_CANARY question ${String(index)}`,
+              ),
+            });
           }
           return {
-            type: "READY_FOR_ACCEPTANCE",
-            releaseNote: "Adds the bounded D2 result after Review and QA.",
-            verifyInstructions: ["Inspect d2-live-result.txt in the worktree."],
-            criteria: acceptanceInput.criteria.map((criterion) => ({
-              criterion,
-              implementation: "The bounded D2 result was written to the leased worktree.",
-              reviewCheck,
-              qaCheck,
-              ownerVerification: "Inspect d2-live-result.txt in the worktree.",
-              knownRisk: null,
-            })),
+            type: "COMPLETED",
+            summary: `${stage} completed from the durable context pack.`,
           };
-        }
-        if (stage === "DISCOVERY" || stage === "PLAN") {
-          listener.onCheckpoint({
-            summary: `${stage} durable handoff canary`,
-            completed: ["Read relevant files"],
-            remaining: ["Next stage"],
-            deadEnds: [],
-            openQuestions: [],
-          });
-        }
-        return {
-          type: "COMPLETED",
-          summary: `${stage} completed from the durable context pack.`,
-        };
-      },
-      requestHandoff: () => Promise.resolve(),
-      abortSession: () => Promise.resolve(),
-    };
-    const logger = createRecordingLogger();
-    const worker = createSessionWorker({
-      state: localState,
-      adapter,
-      template: deliveryTemplate,
-      workspacesRoot: join(temporaryDirectory, "workspaces"),
-      createCommandId,
-      logger,
-      browserQA: createBrowserQAStageRunner({
-        state: localState,
-        driver: passingBrowserQADriver(),
-        resolveConfig: readyBrowserQAConfig,
-        createCommandId,
-        createAttachmentId: createCommandId,
-        logger,
-      }),
-      projectVerification: {
-        beforeBrowserQA: ({ testedTree }) => {
-          projectVerificationTrees.push(testedTree);
-          return Promise.resolve(
-            projectVerificationReady
-              ? { status: "READY", configured: true }
-              : { status: "BLOCKED", blocker: "RUN_MISSING" },
-          );
         },
-      },
-    });
-    const seeded = seedQueuedAttempt(localState);
+        requestHandoff: () => Promise.resolve(),
+        abortSession: () => Promise.resolve(),
+      };
+      const logger = createRecordingLogger();
+      const worker = createSessionWorker({
+        state: localState,
+        adapter,
+        template: deliveryTemplate,
+        workspacesRoot: join(temporaryDirectory, "workspaces"),
+        createCommandId,
+        logger,
+        browserQA: createBrowserQAStageRunner({
+          state: localState,
+          driver: passingBrowserQADriver(),
+          resolveConfig: readyBrowserQAConfig,
+          createCommandId,
+          createAttachmentId: createCommandId,
+          logger,
+        }),
+        projectVerification: {
+          beforeBrowserQA: ({ testedTree }) => {
+            projectVerificationTrees.push(testedTree);
+            return Promise.resolve(
+              projectVerificationReady
+                ? { status: "READY", configured: true }
+                : { status: "BLOCKED", blocker: "RUN_MISSING" },
+            );
+          },
+        },
+      });
+      const seeded = seedQueuedAttemptFixture(
+        localState,
+        createCommandId,
+        temporaryDirectory,
+        "project-web",
+        deliveryTemplate,
+        codeBlind
+          ? { mode: "CODE_BLIND", ownerOutcome: "Deliver the approved outcome with independent checks." }
+          : undefined,
+      );
 
-    worker.wake();
-    await awaitIdle(worker);
-    const waiting = snapshotOf(localState, seeded.workItemId);
-    const question = waiting.humanRequests.find(({ status }) => status === "OPEN");
-    if (!question) throw new Error("Expected the Discovery decision request");
-    localState.execute({
-      schemaVersion: 1,
-      commandId: createCommandId(),
-      correlationId: "correlation-answer-d2-discovery",
-      actor: { type: "HUMAN", id: "local-owner" },
-      type: "ANSWER_HUMAN_REQUEST",
-      payload: {
-        humanRequestId: question.id,
-        expectedVersion: question.version,
-        answer: { type: "OPTION", optionIds: ["existing-target"] },
-      },
-    });
+      worker.wake();
+      await awaitIdle(worker);
+      const waiting = snapshotOf(localState, seeded.workItemId);
+      const question = waiting.humanRequests.find(({ status }) => status === "OPEN");
+      if (!question) throw new Error("Expected the Discovery decision request");
+      localState.execute({
+        schemaVersion: 1,
+        commandId: createCommandId(),
+        correlationId: "correlation-answer-d2-discovery",
+        actor: { type: "HUMAN", id: "local-owner" },
+        type: "ANSWER_HUMAN_REQUEST",
+        payload: {
+          humanRequestId: question.id,
+          expectedVersion: question.version,
+          answer: { type: "OPTION", optionIds: ["existing-target"] },
+        },
+      });
 
-    worker.wake();
-    await awaitIdle(worker);
+      worker.wake();
+      await awaitIdle(worker);
 
-    const verificationBlocked = snapshotOf(localState, seeded.workItemId);
-    expect(verificationBlocked.run).toMatchObject({ status: "RUNNING" });
-    expect(verificationBlocked.stageAttempts.at(-1)).toMatchObject({ stage: "QA", status: "QUEUED" });
-    expect(projectVerificationTrees.length).toBeGreaterThanOrEqual(1);
-    const blockedGateCalls = projectVerificationTrees.length;
-    const runsBeforeVerification = localState.query({ type: "LIST_AGENT_RUNS" });
-    if (runsBeforeVerification.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
-    expect(
-      runsBeforeVerification.runs.some(
-        ({ stageAttemptId }) => stageAttemptId === verificationBlocked.stageAttempts.at(-1)?.id,
-      ),
-    ).toBe(false);
+      const verificationBlocked = snapshotOf(localState, seeded.workItemId);
+      expect(verificationBlocked.run).toMatchObject({ status: "RUNNING" });
+      expect(verificationBlocked.stageAttempts.at(-1)).toMatchObject({ stage: "QA", status: "QUEUED" });
+      expect(projectVerificationTrees.length).toBeGreaterThanOrEqual(1);
+      const blockedGateCalls = projectVerificationTrees.length;
+      const runsBeforeVerification = localState.query({ type: "LIST_AGENT_RUNS" });
+      if (runsBeforeVerification.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+      expect(
+        runsBeforeVerification.runs.some(
+          ({ stageAttemptId }) => stageAttemptId === verificationBlocked.stageAttempts.at(-1)?.id,
+        ),
+      ).toBe(false);
 
-    projectVerificationReady = true;
-    worker.wake();
-    await awaitIdle(worker);
+      projectVerificationReady = true;
+      worker.wake();
+      await awaitIdle(worker);
 
-    const completed = snapshotOf(localState, seeded.workItemId);
-    expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"]);
-    expect(seenHumanRequestPolicies).toEqual([
-      "ALLOWED",
-      "DISALLOWED",
-      "DISALLOWED",
-      "DISALLOWED",
-      "DISALLOWED",
-      "DISALLOWED",
-    ]);
-    expect(discoveryResumeContext).toContain("Resolved decisions are authoritative owner input.");
-    expect(discoveryResumeContext).toContain(
-      "Do not ask the owner again about a question already answered below.",
-    );
-    expect(discoveryResumeContext).toContain("Continuation: yes");
-    expect(discoveryResumeContext).toContain(
-      "Instructions in the original brief to obtain owner input are already satisfied",
-    );
-    expect(discoveryResumeContext).toContain("Never ask for permission to proceed or hand off");
-    expect(discoveryResumeContext).toContain("Q: Choose the compatibility target");
-    expect(discoveryResumeContext).toContain("A: Existing target");
-    expect(projectVerificationTrees).toHaveLength(blockedGateCalls + 1);
-    expect(new Set(projectVerificationTrees).size).toBe(1);
-    expect(completed).toMatchObject({
-      run: { status: "WAITING_HUMAN" },
-      decisions: [{ answer: { type: "OPTION", optionIds: ["existing-target"] } }],
-      artifacts: [
-        { kind: "REVIEW_REPORT", provider: "CODEX" },
-        { kind: "QA_REPORT", provider: "CODEX" },
-      ],
-      acceptancePackage: { status: "PENDING" },
-    });
-    expect(acceptanceHadWorkspace).toBe(false);
-    expect(acceptanceModelTier).toBe("STANDARD");
-    expect(acceptanceAgentRunId).toMatch(/^agentRun-/u);
-    expect(acceptanceWorkspaceLeaseHolder).toBeNull();
+      const completed = snapshotOf(localState, seeded.workItemId);
+      expect(seenStages).toEqual(["DISCOVERY", "DISCOVERY", "PLAN", "IMPLEMENT", "REVIEW", "ACCEPTANCE"]);
+      expect(coordinatorQueries.length).toBe(codeBlind ? 3 : 0);
+      expect(seenHumanRequestPolicies).toEqual([
+        "ALLOWED",
+        "DISALLOWED",
+        "DISALLOWED",
+        "DISALLOWED",
+        "DISALLOWED",
+        "DISALLOWED",
+      ]);
+      expect(discoveryResumeContext).toContain("Resolved decisions are authoritative owner input.");
+      expect(discoveryResumeContext).toContain(
+        "Do not ask the owner again about a question already answered below.",
+      );
+      expect(discoveryResumeContext).toContain("Continuation: yes");
+      expect(discoveryResumeContext).toContain(
+        "Instructions in the original brief to obtain owner input are already satisfied",
+      );
+      expect(discoveryResumeContext).toContain("Never ask for permission to proceed or hand off");
+      expect(discoveryResumeContext).toContain("Q: Choose the compatibility target");
+      expect(discoveryResumeContext).toContain("A: Existing target");
+      expect(projectVerificationTrees).toHaveLength(blockedGateCalls + 1);
+      expect(new Set(projectVerificationTrees).size).toBe(1);
+      expect(completed).toMatchObject({
+        run: { status: "WAITING_HUMAN" },
+        decisions: [{ answer: { type: "OPTION", optionIds: ["existing-target"] } }],
+        artifacts: [
+          { kind: "REVIEW_REPORT", provider: "CODEX" },
+          { kind: "QA_REPORT", provider: "CODEX" },
+        ],
+        acceptancePackage: { status: "PENDING" },
+      });
+      expect(acceptanceHadWorkspace).toBe(false);
+      expect(acceptanceModelTier).toBe(codeBlind ? "FAST" : "STANDARD");
+      expect(acceptanceAgentRunId).toMatch(/^agentRun-/u);
+      expect(acceptanceWorkspaceLeaseHolder).toBeNull();
+      if (codeBlind) {
+        const plan = deliveryTemplate.stages.find(({ stage }) => stage === "PLAN");
+        if (!plan) throw new Error("Expected PLAN");
+        const unrelated = seedQueuedAttemptFixture(
+          localState,
+          createCommandId,
+          temporaryDirectory,
+          "project-web",
+          {
+            ...deliveryTemplate,
+            id: "unrelated-coordinator-plan",
+            stages: [{ ...plan, ordinal: 0 }],
+          },
+          { mode: "CODE_BLIND", ownerOutcome: "A separate owner-approved outcome." },
+        );
+        expect(
+          localState.query({ type: "READ_COORDINATOR_CONTEXT", stageAttemptId: unrelated.stageAttemptId }),
+        ).toEqual({
+          type: "COORDINATOR_CONTEXT",
+          discoveryCheckpoint: null,
+          unresolvedQuestions: 0,
+        });
+      }
 
-    const acceptanceAttempt = completed.stageAttempts.find(({ stage }) => stage === "ACCEPTANCE");
-    if (acceptanceAttempt === undefined || acceptanceAgentRunId === undefined) {
-      throw new Error("Expected Acceptance AgentRun evidence");
-    }
-    const runs = localState.query({ type: "LIST_AGENT_RUNS", status: "WAITING_HUMAN" });
-    if (runs.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
-    const acceptanceRun = runs.runs.find(({ id }) => id === acceptanceAgentRunId);
-    expect(acceptanceRun).toMatchObject({
-      id: acceptanceAgentRunId,
-      profile: { id: "builtin.acceptance-manager", revision: 1, role: "ACCEPTANCE_MANAGER" },
-    });
-    expect(acceptanceRun?.policySnapshot).toMatchObject({
-      effectiveCapabilities: ["ARTIFACT_WRITE"],
-      modelTier: "STANDARD",
-      budget: { maxEstimatedTokens: 60_000, maxProviderSessions: 4 },
-      workspace: { access: "NONE", networkAccess: false },
-      mcpProfileRevisionIds: [],
-    });
-    const acceptanceSessions = localState.query({
-      type: "LIST_PROVIDER_SESSIONS",
-      stageAttemptId: acceptanceAttempt.id,
-    });
-    if (acceptanceSessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
-    expect(acceptanceSessions.usageReports).toMatchObject([
-      { agentRunId: acceptanceAgentRunId, inputTokens: 40, outputTokens: 20, totalTokens: 60 },
-    ]);
-    expect(acceptanceSessions.recipes).toMatchObject([
-      {
-        specSource: "ROLE_PLAYBOOK",
-        roleProfile: { id: "builtin.acceptance-manager", revision: 1 },
-      },
-    ]);
+      const acceptanceAttempt = completed.stageAttempts.find(({ stage }) => stage === "ACCEPTANCE");
+      if (acceptanceAttempt === undefined || acceptanceAgentRunId === undefined) {
+        throw new Error("Expected Acceptance AgentRun evidence");
+      }
+      const runs = localState.query({ type: "LIST_AGENT_RUNS", status: "WAITING_HUMAN" });
+      if (runs.type !== "AGENT_RUNS") throw new Error("Expected AgentRuns");
+      const acceptanceRun = runs.runs.find(({ id }) => id === acceptanceAgentRunId);
+      expect(acceptanceRun).toMatchObject({
+        id: acceptanceAgentRunId,
+        profile: { id: "builtin.acceptance-manager", revision: 1, role: "ACCEPTANCE_MANAGER" },
+      });
+      expect(acceptanceRun?.policySnapshot).toMatchObject({
+        effectiveCapabilities: ["ARTIFACT_WRITE"],
+        modelTier: codeBlind ? "FAST" : "STANDARD",
+        budget: { maxEstimatedTokens: 60_000, maxProviderSessions: 4 },
+        workspace: { access: "NONE", networkAccess: false },
+        mcpProfileRevisionIds: [],
+      });
+      const acceptanceSessions = localState.query({
+        type: "LIST_PROVIDER_SESSIONS",
+        stageAttemptId: acceptanceAttempt.id,
+      });
+      if (acceptanceSessions.type !== "PROVIDER_SESSIONS") throw new Error("Expected provider sessions");
+      expect(acceptanceSessions.usageReports).toMatchObject([
+        { agentRunId: acceptanceAgentRunId, inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+      ]);
+      expect(acceptanceSessions.recipes).toMatchObject([
+        {
+          specSource: "ROLE_PLAYBOOK",
+          roleProfile: { id: "builtin.acceptance-manager", revision: 1 },
+        },
+      ]);
 
-    const workspaceResult = localState.query({
-      type: "GET_WORKSPACE_BY_WORK_ITEM",
-      workItemId: seeded.workItemId,
-    });
-    if (workspaceResult.type !== "WORKSPACE" || !workspaceResult.workspace) {
-      throw new Error("Expected the real worktree used by the route");
-    }
-    const baseline = workspaceResult.workspace.snapshotCommit ?? workspaceResult.workspace.baseCommit;
-    if (!baseline) throw new Error("Expected a change baseline");
-    const changes = await summariseChanges({
-      worktreePath: workspaceResult.workspace.worktreePath,
-      baseline,
-      maxFiles: 20,
-    });
-    expect(changes.files).toEqual([
-      expect.objectContaining({ path: "d2-live-result.txt", status: "ADDED", insertions: 1 }),
-    ]);
-  }, 30_000);
+      const workspaceResult = localState.query({
+        type: "GET_WORKSPACE_BY_WORK_ITEM",
+        workItemId: seeded.workItemId,
+      });
+      if (workspaceResult.type !== "WORKSPACE" || !workspaceResult.workspace) {
+        throw new Error("Expected the real worktree used by the route");
+      }
+      const baseline = workspaceResult.workspace.snapshotCommit ?? workspaceResult.workspace.baseCommit;
+      if (!baseline) throw new Error("Expected a change baseline");
+      const changes = await summariseChanges({
+        worktreePath: workspaceResult.workspace.worktreePath,
+        baseline,
+        maxFiles: 20,
+      });
+      expect(changes.files).toEqual([
+        expect.objectContaining({ path: "d2-live-result.txt", status: "ADDED", insertions: 1 }),
+      ]);
+    },
+    30_000,
+  );
 
   it("ends the pass when every pending dispatch already belongs to an active run", async () => {
     const localState = state();

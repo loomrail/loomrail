@@ -1,7 +1,14 @@
 # Loomrail domain context
 
-This glossary is the canonical vocabulary for the work-management dependency slice. It describes domain meaning,
-not implementation structure.
+This glossary is the canonical vocabulary for work management, bounded execution and release boundaries.
+It describes domain meaning, not implementation structure.
+
+- **Code-blind Coordinator** — an opt-in planning role with no repository, network or tool access. It receives
+  a separate owner outcome and closed progress facts, and delegates technical work through a bounded plan.
+- **Coordinator Outcome** — a short explicit owner-authored product objective, supplied separately from source-bearing
+  task artifacts. It must contain no source code; it is not an automatically sanitized repository summary.
+- **Work Order** — a bounded proposed implementation outcome with dependencies and a stop condition. It is neither
+  execution permission nor evidence of completion.
 
 - **WorkItem** — a versioned unit of product work owned by one Project. A WorkItem may be a container or an
   executable leaf.

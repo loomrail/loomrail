@@ -50,6 +50,7 @@ export type SessionWorkerDeps = {
     projectId: string,
     stage?: WorkflowStage,
     avoidProvider?: ProviderId | null,
+    requiredProvider?: "CODEX" | "CLAUDE_CODE",
   ) => ProviderAdapter;
   /** Compatibility injection for focused worker tests that intentionally exercise one adapter. */
   adapter?: ProviderAdapter;

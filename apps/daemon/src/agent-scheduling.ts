@@ -63,6 +63,7 @@ export const readAgentSchedulingSnapshot = (input: {
     projectId: string,
     stage?: StageAttempt["stage"],
     avoidProvider?: ProviderId | null,
+    requiredProvider?: "CODEX" | "CLAUDE_CODE",
   ) => ProviderAdapter;
   excludedDispatchIds?: ReadonlySet<string>;
 }): AgentSchedulingSnapshot => {
@@ -99,8 +100,21 @@ export const readAgentSchedulingSnapshot = (input: {
           })()
         : null;
     let adapter: ProviderAdapter;
+    const assignmentResult = input.state.query({
+      type: "GET_SQUAD_ASSIGNMENT",
+      pipelineRunId: dispatch.pipelineRunId,
+    });
+    const manager =
+      assignmentResult.type === "SQUAD_ASSIGNMENT" &&
+      assignmentResult.assignment?.stages.find(({ stage }) => stage === attempt.stage)?.execution?.kind ===
+        "CODE_BLIND_MANAGER";
     try {
-      adapter = input.resolveAdapter(dispatch.projectId, attempt.stage, authorProvider);
+      adapter = input.resolveAdapter(
+        dispatch.projectId,
+        attempt.stage,
+        authorProvider,
+        manager ? "CODEX" : undefined,
+      );
     } catch (error: unknown) {
       if (!(error instanceof StateStoreError)) throw error;
       skipped.push({ dispatchId: dispatch.id, reason: "ADAPTER_UNAVAILABLE" });
@@ -117,7 +131,9 @@ export const readAgentSchedulingSnapshot = (input: {
       ready: attempt.status === "QUEUED" || attempt.status === "RUNNING",
       budgetAllowed: snapshot.run?.status === "RUNNING",
       requiresStableCheckpoint: attempt.stage === "REVIEW" || attempt.stage === "QA",
-      workspace: workspaceClaim(input.state, dispatch.workItemId, attempt.stage, latestCheckpoint(snapshot)),
+      workspace: manager
+        ? { type: "NONE" }
+        : workspaceClaim(input.state, dispatch.workItemId, attempt.stage, latestCheckpoint(snapshot)),
     });
   }
 
@@ -139,7 +155,10 @@ export const readAgentSchedulingSnapshot = (input: {
             stageAttemptId: run.stageAttemptId,
             projectId: run.projectId,
             provider: run.provider,
-            workspace: workspaceClaim(input.state, run.workItemId, attempt.stage, latestCheckpoint(snapshot)),
+            workspace:
+              run.policySnapshot?.workspace.access === "NONE"
+                ? { type: "NONE" }
+                : workspaceClaim(input.state, run.workItemId, attempt.stage, latestCheckpoint(snapshot)),
           };
         })
       : [];

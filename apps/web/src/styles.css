@@ -3586,6 +3586,13 @@ body.is-resizing {
   justify-self: start;
 }
 
+.workflow-coordinator-controls {
+  display: grid;
+  gap: var(--lr-space-3);
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .workflow-policy-form--override {
   flex: 1 1 100%;
 }

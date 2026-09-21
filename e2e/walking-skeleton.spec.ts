@@ -1048,6 +1048,79 @@ test.describe("authenticated walking skeleton", () => {
     daemon = undefined;
   });
 
+  for (const locale of ["en", "ru"] as const) {
+    test(`code-blind opt-in is explicit, keyboard accessible and durable (${locale})`, async ({
+      page,
+    }, testInfo) => {
+      daemon = await startDaemon({
+        bootstrapToken: randomBytes(32).toString("base64url"),
+        logger: false,
+        webRoot: resolve("apps/web/dist"),
+      });
+      await page.goto(daemon.bootstrapUrl);
+      await initializeWorkspace(page);
+      await createTask(page, "Coordinator boundary", "const SOURCE_CANARY = 'must not reach the manager';");
+      const inspector = page.getByRole("complementary", { name: "Coordinator boundary" });
+      await inspector.getByRole("button", { name: "Move to Ready" }).click();
+      if (locale === "ru") {
+        await page.evaluate(() => {
+          localStorage.setItem("loomrail.locale", "ru");
+        });
+        await page.reload();
+      }
+      const toggle = page.locator("#workflow-coordinator-mode");
+      const start = page.getByRole("button", {
+        name: locale === "en" ? "Start workflow" : "Запустить процесс",
+        exact: true,
+      });
+      await expect(toggle).not.toBeChecked();
+      await expect(start).toBeEnabled();
+      await toggle.focus();
+      await page.keyboard.press("Space");
+      await expect(toggle).toBeChecked();
+      await expect(toggle).toBeFocused();
+      await expect(start).toBeDisabled();
+      const outcome = page.locator("#workflow-coordinator-outcome");
+      await expect(outcome).toHaveValue("");
+      await expect(page.locator("#workflow-start-model-tier")).toBeDisabled();
+      await expect(page.locator("#workflow-start-model-tier")).toHaveText("Astra → Luna / Sonnet");
+      await outcome.fill("Make task progress clear to the owner without changing approval gates.");
+      await expect(start).toBeEnabled();
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((value) => {
+          document.documentElement.dataset["theme"] = value;
+        }, theme);
+        await outcome.focus();
+        await expect(outcome).toBeFocused();
+        await expect(outcome).toBeVisible();
+        for (const width of [375, 1280]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await expect(toggle).toBeVisible();
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+            true,
+          );
+          await outcome.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: testInfo.outputPath(`coordinator-${theme}-${String(width)}.png`) });
+        }
+      }
+      const responsePromise = page.waitForResponse(
+        (response) => response.url().endsWith("/pipeline/start") && response.request().method() === "POST",
+      );
+      await start.click();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      const saved = workflowSnapshotSchema.parse(await response.json());
+      expect(saved.orchestration).toEqual({
+        mode: "CODE_BLIND",
+        ownerOutcome: "Make task progress clear to the owner without changing approval gates.",
+      });
+      await page.reload();
+      await expect(toggle).toHaveCount(0);
+      await expect(page.getByText("Astra → Luna / Sonnet", { exact: false })).toBeVisible();
+      expect(saved.orchestration?.ownerOutcome).not.toContain("SOURCE_CANARY");
+    });
+  }
+
   test("opens a real persisted workbench and preserves local preferences", async ({ page }) => {
     const bootstrapToken = randomBytes(32).toString("base64url");
     const requestedUrls: string[] = [];

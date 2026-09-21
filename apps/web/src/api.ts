@@ -1144,6 +1144,7 @@ export const updateWorkItem = async (workItem: WorkItem, patch: UpdateWorkItemPa
 };
 
 export type PipelineStartPolicy = {
+  orchestration?: import("@loomrail/contracts").CodeBlindOrchestration;
   maxEstimatedTokens: number;
   modelTierOverride: ModelTier | null;
   agentRunMaxEstimatedTokensOverride: number | null;
@@ -1162,6 +1163,7 @@ export const startPipeline = async (workItem: WorkItem, policy: PipelineStartPol
         maxEstimatedTokens: policy.maxEstimatedTokens,
         modelTierOverride: policy.modelTierOverride,
         agentRunMaxEstimatedTokensOverride: policy.agentRunMaxEstimatedTokensOverride,
+        ...(policy.orchestration === undefined ? {} : { orchestration: policy.orchestration }),
       }),
     },
   );

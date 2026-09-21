@@ -43,7 +43,11 @@ export type ProviderRegistry = {
   availability: () => readonly ProviderAvailability[];
   resolve: (
     project: Project,
-    options?: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined },
+    options?: {
+      stage?: WorkflowStage | undefined;
+      avoidProvider?: ProviderId | null | undefined;
+      requiredProvider?: LiveProviderId | undefined;
+    },
   ) => ProjectProviderResolution;
   environment: {
     override: LiveProviderId | null;
@@ -177,7 +181,11 @@ export const createProviderRegistry = (
 
   const resolve = (
     project: Project,
-    resolveOptions: { stage?: WorkflowStage | undefined; avoidProvider?: ProviderId | null | undefined } = {},
+    resolveOptions: {
+      stage?: WorkflowStage | undefined;
+      avoidProvider?: ProviderId | null | undefined;
+      requiredProvider?: LiveProviderId | undefined;
+    } = {},
   ): ProjectProviderResolution => {
     const preferred = environment.invalid
       ? null
@@ -203,13 +211,17 @@ export const createProviderRegistry = (
     // An unknown override is a configuration error, never an instruction to try AUTO. Preserve
     // the observed CLI readiness below, but deny session admission through the same capability
     // the domain dispatch gate checks for every stage.
-    const effectiveProvider: LiveProviderId = environment.invalid
-      ? "CODEX"
-      : (preferred ?? eligible[0] ?? "CODEX");
+    const effectiveProvider: LiveProviderId =
+      resolveOptions.requiredProvider ??
+      (environment.invalid ? "CODEX" : (preferred ?? eligible[0] ?? "CODEX"));
     const observedAvailability = availability[effectiveProvider];
-    const effectiveAvailability = environment.invalid
-      ? { ...observedAvailability, ready: false }
-      : observedAvailability;
+    const effectiveAvailability =
+      environment.invalid ||
+      (resolveOptions.requiredProvider !== undefined &&
+        environment.override !== null &&
+        environment.override !== resolveOptions.requiredProvider)
+        ? { ...observedAvailability, ready: false }
+        : observedAvailability;
     const fallbackReason =
       preferred === null && eligible.length === 0
         ? "NO_READY_LIVE_PROVIDER"

@@ -506,6 +506,12 @@ export const decideStartPipeline = (
     ids: WorkflowIds;
   },
 ): StartWorkflowDecision => {
+  if (command.payload.orchestration !== undefined && command.actor.type !== "HUMAN") {
+    throw new WorkflowDomainError(
+      "WORKFLOW_CONTROL_NOT_ALLOWED",
+      "Only the owner can enable a code-blind coordinator",
+    );
+  }
   const template = validateWorkflowTemplate(command.payload.template);
   verifyWorkItemVersion(context.workItem, command.payload.expectedVersion);
   if (context.workItem.state !== "READY" || context.hasChildren) {

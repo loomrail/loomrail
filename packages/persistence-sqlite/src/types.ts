@@ -313,6 +313,7 @@ export type StateQuery =
   // finished one) -- so the activity route resolves each referenced AgentRun's stage through this,
   // not through the snapshot, to stay correct across that boundary.
   | { type: "GET_STAGE_ATTEMPT"; stageAttemptId: string }
+  | { type: "READ_SESSION_LOOP_STATE"; stageAttemptId: string; agentRunId: string | null }
   | {
       // Raw read of the prunable `agent_run_activity` buffer for one AgentRun (Task 6). Task 8's
       // merged feed layers `origin` and cross-source pagination on top of this; this query only
@@ -394,6 +395,11 @@ export type StateQuery =
       type: "READ_CONTEXT_SOURCES";
       stageAttemptId: string;
       sessionOrdinal: number;
+    }
+  | {
+      // Closed facts only: do not materialize ordinary source-bearing context for the manager.
+      type: "READ_COORDINATOR_CONTEXT";
+      stageAttemptId: string;
     }
   | {
       // Spec §D5: an attempt's sessions, the recipe each was assembled from, and the checkpoints
@@ -541,6 +547,21 @@ export type StateQueryResult =
   | { type: "WORK_ITEMS"; workItems: WorkItem[] }
   | { type: "EVENTS"; events: DomainEvent[]; nextSequence: number; hasMore: boolean }
   | { type: "CONTEXT_SOURCES"; sources: ContextSources; verificationPlan: VerificationPlan | null }
+  | {
+      type: "SESSION_LOOP_STATE";
+      attempt: StageAttempt;
+      humanRequests: "ALLOWED" | "DISALLOWED";
+      nextOrdinal: number;
+      running: boolean;
+      agentRunSessionCount: number;
+      agentRunUsageTotal: number;
+      activityDegraded: boolean;
+    }
+  | {
+      type: "COORDINATOR_CONTEXT";
+      discoveryCheckpoint: { id: string; version: 1 } | null;
+      unresolvedQuestions: number;
+    }
   | {
       type: "PROVIDER_SESSIONS";
       sessions: ProviderSession[];

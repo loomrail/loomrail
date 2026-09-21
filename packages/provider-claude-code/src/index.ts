@@ -17,6 +17,7 @@ import {
   providerStageResultSchemaFor,
   ProcessSpawnError,
   renderProviderInvocationPrompt,
+  ProviderInvocationAuthorityError,
   runProcess,
   type DecodedProviderStageResult,
   type ProcessExitOutcome,
@@ -154,6 +155,13 @@ export const createClaudeCodeProvider = (options: CreateClaudeCodeProviderOption
       invocation: ProviderInvocation,
       listener: ProviderSessionListener,
     ): Promise<ProviderOutcome> => {
+      if (invocation.coordinator !== undefined) {
+        throw new ProviderInvocationAuthorityError(
+          "COORDINATOR_AUTHORITY_MISMATCH",
+          "This coordinator is pinned to CODEX; Claude/Fable is not qualified",
+          { access: "READ_ONLY", tool: null },
+        );
+      }
       const scratchDirectory = await mkdtemp(join(tmpdir(), "loomrail-claude-"));
       try {
         const connections = providerMcpConnectionSchema.array().max(64).parse(invocation.mcpConnections);

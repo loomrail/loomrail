@@ -3,6 +3,7 @@ import type { SyntheticEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   isSessionPauseFailureCode,
+  codeBlindOrchestrationSchema,
   modelTierSchema,
   prioritySchema,
   riskSchema,
@@ -2904,8 +2905,25 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const [budgetLimitInput, setBudgetLimitInput] = useState(String(suggestedPipelineBudget));
   const [agentRunLimitInput, setAgentRunLimitInput] = useState(String(suggestedAgentRunBudget));
   const [modelTierOverride, setModelTierOverride] = useState<ModelTier>("FAST");
-  const modelOptions = modelPolicyOptions(providerSelectionQuery.data, t);
-  const selectedModelDescription = modelOptions.find(({ value }) => value === modelTierOverride)?.description;
+  const [codeBlind, setCodeBlind] = useState(false);
+  const [coordinatorOutcome, setCoordinatorOutcome] = useState("");
+  const coordinatorOutcomeValid =
+    !codeBlind ||
+    codeBlindOrchestrationSchema.safeParse({ mode: "CODE_BLIND", ownerOutcome: coordinatorOutcome }).success;
+  const coordinatorEnabled = codeBlind || workflowQuery.data?.orchestration !== undefined;
+  const displayedModelTier = coordinatorEnabled ? "DEEP" : modelTierOverride;
+  const modelOptions = coordinatorEnabled
+    ? [
+        {
+          value: "DEEP",
+          label: "Astra → Luna / Sonnet",
+          description: "gpt-6-astra → gpt-5.6-luna / claude-sonnet-5",
+        },
+      ]
+    : modelPolicyOptions(providerSelectionQuery.data, t);
+  const selectedModelDescription = modelOptions.find(
+    ({ value }) => value === displayedModelTier,
+  )?.description;
   const dependencyDataReady = workItemsQuery.data !== undefined && dependenciesQuery.data !== undefined;
   const dependencyView = deriveWorkItemDependencyView(
     item,
@@ -2941,6 +2959,7 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
   const startWorkflow = (): void => {
     if (
       !budgetLimitIsValid ||
+      !coordinatorOutcomeValid ||
       !agentRunLimitIsValid ||
       !dependencyDataReady ||
       dependencyDataFailed ||
@@ -2953,6 +2972,14 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
         maxEstimatedTokens: parsedBudgetLimit,
         modelTierOverride,
         agentRunMaxEstimatedTokensOverride: parsedAgentRunLimit,
+        ...(codeBlind
+          ? {
+              orchestration: codeBlindOrchestrationSchema.parse({
+                mode: "CODE_BLIND",
+                ownerOutcome: coordinatorOutcome,
+              }),
+            }
+          : {}),
       },
       workItem: item,
     });
@@ -3054,18 +3081,54 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
             label={t("workflow.model.input")}
           >
             <SelectControl
+              disabled={codeBlind}
               ariaLabel={t("workflow.model.input")}
               id="workflow-start-model-tier"
               onValueChange={(value) => {
                 setModelTierOverride(modelTierSchema.parse(value));
               }}
               options={modelOptions}
-              value={modelTierOverride}
+              value={displayedModelTier}
             />
           </Field>
+          <div className="workflow-coordinator-controls">
+            <Checkbox
+              checked={codeBlind}
+              id="workflow-coordinator-mode"
+              label={t("workflow.coordinator.enable")}
+              description={t("workflow.coordinator.description")}
+              onCheckedChange={(value) => {
+                setCodeBlind(value === true);
+              }}
+              disabled={startMutation.isPending}
+            />
+            {codeBlind ? (
+              <Field
+                htmlFor="workflow-coordinator-outcome"
+                label={t("workflow.coordinator.outcome")}
+                description={t("workflow.coordinator.outcomeDescription")}
+                {...(coordinatorOutcomeValid ? {} : { error: t("workflow.coordinator.invalid") })}
+                required
+              >
+                <Textarea
+                  id="workflow-coordinator-outcome"
+                  value={coordinatorOutcome}
+                  onChange={(event) => {
+                    setCoordinatorOutcome(event.currentTarget.value);
+                  }}
+                  minLength={10}
+                  maxLength={2000}
+                  invalid={!coordinatorOutcomeValid}
+                  disabled={startMutation.isPending}
+                  required
+                />
+              </Field>
+            ) : null}
+          </div>
           <Button
             disabled={
               item.state !== "READY" ||
+              !coordinatorOutcomeValid ||
               !budgetLimitIsValid ||
               !agentRunLimitIsValid ||
               !dependencyDataReady ||
@@ -3146,6 +3209,9 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
 
   return (
     <div className="workflow-panel">
+      {snapshot.orchestration === undefined ? null : (
+        <p className="inspector-copy">{t("workflow.coordinator.description")}</p>
+      )}
       <div className="workflow-panel__status">
         <span>{t("workflow.name")}</span>
         <Status
@@ -3180,9 +3246,11 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
             <span>
               {t("workflow.modelTier.current", {
                 tier:
-                  budgetPolicy.modelTierOverride === undefined || budgetPolicy.modelTierOverride === null
-                    ? t("workflow.modelTier.roleDefault")
-                    : t(`workflow.modelTier.${budgetPolicy.modelTierOverride}`),
+                  snapshot.orchestration !== undefined
+                    ? "Astra → Luna / Sonnet"
+                    : budgetPolicy.modelTierOverride === undefined || budgetPolicy.modelTierOverride === null
+                      ? t("workflow.modelTier.roleDefault")
+                      : t(`workflow.modelTier.${budgetPolicy.modelTierOverride}`),
               })}
             </span>
             <span>
@@ -3307,13 +3375,14 @@ const WorkflowPanel = ({ item }: { item: WorkItem }): React.JSX.Element => {
                 label={t("workflow.model.input")}
               >
                 <SelectControl
+                  disabled={snapshot.orchestration !== undefined}
                   ariaLabel={t("workflow.model.input")}
                   id="workflow-override-model-tier"
                   onValueChange={(value) => {
                     setModelTierOverride(modelTierSchema.parse(value));
                   }}
                   options={modelOptions}
-                  value={modelTierOverride}
+                  value={displayedModelTier}
                 />
               </Field>
               <Field
