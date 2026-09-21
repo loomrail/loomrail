@@ -47,6 +47,13 @@ const startServer = async (
   return { server, origin: `http://127.0.0.1:${address.port.toString()}` };
 };
 
+// The driver's own step timeout is scaffolding in every test that asserts a non-timeout outcome.
+// Starting and driving Chromium can consume a one-second budget on a loaded CI host by itself, and
+// the run then reports TIMEOUT or ERROR instead of the branch under test — which is how the
+// hydration-ordering test below failed on a Windows runner while the driver behaved correctly.
+// Tests that do measure the timeout keep their own deliberately short value.
+const SCAFFOLD_STEP_TIMEOUT_MS = 30_000;
+
 const acceptWebSocketUpgrades = (
   server: Server,
   onClientFrame: (opcode: number, payload: Buffer) => void = () => undefined,
@@ -380,9 +387,10 @@ describe("Playwright BrowserDriver", () => {
       },
     };
 
-    const execution = await createPlaywrightDriver({ artifactsDirectory: directory, timeoutMs: 1_000 }).run(
-      run,
-    );
+    const execution = await createPlaywrightDriver({
+      artifactsDirectory: directory,
+      timeoutMs: SCAFFOLD_STEP_TIMEOUT_MS,
+    }).run(run);
 
     expect(execution.result).toMatchObject({ outcome: "MEASURED", defects: [] });
     await execution.dispose();
@@ -666,7 +674,7 @@ describe("Playwright BrowserDriver", () => {
     const startedAt = Date.now();
     const execution = await createPlaywrightDriver({
       artifactsDirectory: directory,
-      timeoutMs: 30_000,
+      timeoutMs: SCAFFOLD_STEP_TIMEOUT_MS,
     }).run(qaRun(fixture.origin));
 
     if (execution.result.outcome !== "ERROR") throw new Error(JSON.stringify(execution.result));
@@ -740,7 +748,7 @@ describe("Playwright BrowserDriver", () => {
 
     const execution = await createPlaywrightDriver({
       artifactsDirectory: directory,
-      timeoutMs: 1_000,
+      timeoutMs: SCAFFOLD_STEP_TIMEOUT_MS,
     }).run(run);
 
     expect(execution.result.outcome).toBe("MEASURED");
@@ -902,7 +910,7 @@ describe("Playwright BrowserDriver", () => {
 
     const execution = await createPlaywrightDriver({
       artifactsDirectory: directory,
-      timeoutMs: 1_000,
+      timeoutMs: SCAFFOLD_STEP_TIMEOUT_MS,
     }).run(qaRun(fixture.origin));
 
     expect(execution.result).toMatchObject({ outcome: "ERROR", code: "EVIDENCE_INVALID" });

@@ -42,7 +42,9 @@ const currentRateLimits = {
   },
 };
 
-if (mode === "timeout-stubborn") process.on("SIGTERM", () => undefined);
+// Record the receipt so the test can prove the escalation branch ran, instead of inferring it
+// from wall-clock timing. Node delivers no catchable SIGTERM on Windows, so this stays empty there.
+if (mode === "timeout-stubborn") process.on("SIGTERM", () => writeLog({ ignoredSignal: "SIGTERM" }));
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on("line", (line) => {
