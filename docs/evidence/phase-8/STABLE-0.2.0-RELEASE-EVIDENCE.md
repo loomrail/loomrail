@@ -75,7 +75,8 @@ scaffolding, short enough that a loaded host lost the race and the branch under 
   could consume. The file's existing 30 s literal became a shared named constant for the three tests that assert a
   non-timeout outcome; the two that measure the timeout keep their short budgets.
 
-Two of these failed during this release's own verification, so they were release-blocking rather than cosmetic.
+Both failed during this release's own verification — the first in a full local `pnpm verify`, the second on
+`Verify (windows-latest)` — so they were release-blocking rather than cosmetic.
 
 ## Boundaries
 
