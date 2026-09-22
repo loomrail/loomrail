@@ -10,13 +10,20 @@ export default defineConfig({
     // keep their own explicit bounds, so this package-level timeout remains a hang detector rather
     // than a performance claim.
     //
-    // Raised from 60s once the migration chain reached 0062. The populated-v60 migration test is
-    // the worst case and is wildly platform-skewed: 0.77s on a macOS runner against 19.8s and
-    // 28.4s on two consecutive Windows runs of the same commit, then 68s once one more migration
-    // was appended. The Windows cost is neither in the new migration (it creates two tables and an
-    // index, and does not set `rebuildsAReferencedTable`, so it triggers no `foreign_key_check`)
-    // nor proportional to the work added -- it is the runner's filesystem, and it deserves its own
-    // investigation rather than a number chosen to stay ahead of it. 120s matches what
+    // Raised from 60s when the populated-v60 migration test started crossing it on Windows, and
+    // kept at 120s now that the same test no longer comes near it. That earlier note left the
+    // Windows cost as an open question and guessed at the migration chain; the answer turned out to
+    // be neither. The skew -- 0.77s on macOS against 19.8s, 28.4s and then 68s on Windows, ending
+    // in a timeout on run 35641932385 -- was that one test's own fixture loop, which replayed
+    // migrations 1..60 in autocommit on a connection left in SQLite's default DELETE journal. That
+    // is ~950 transactions, each creating, fsyncing and unlinking a journal file, which is the
+    // operation a Windows runner's filter drivers charge most for; the cost tracked statement count
+    // and runner load, never chain length. The two tests beside it migrate the longer 1..62 chain
+    // through `openLocalState` -- WAL, one transaction per migration, and the only path production
+    // upgrades take -- in about two seconds each on that same runner. Batching the fixture into a
+    // single transaction returned the test to ~0.2s on macOS, so a new migration no longer pushes
+    // this number. 120s stays because it must still cover this package's Git, worktree and process
+    // tests on Windows, which have not been measured the same way, and matches what
     // @loomrail/process-supervision already allows for the same reason.
     testTimeout: 120_000,
     // Each file opens real SQLite databases and several also spawn Git. Running them concurrently
