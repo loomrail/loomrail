@@ -473,10 +473,21 @@ describe("durable guided deployment", () => {
       "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?, ?, ?, ?)",
     );
     const migrations = await loadMigrationSources();
+    // One transaction for the whole fixture. Left in autocommit, the 890 statements below are 890
+    // separate transactions, and in SQLite's default DELETE journal each one creates, fsyncs and
+    // unlinks a journal file. That per-transaction file churn is what crossed the package's 120s
+    // hang detector on a Windows runner, and it is scaffolding cost rather than anything this test
+    // measures: the two tests above migrate the *longer* 1..62 chain through `openLocalState` --
+    // which sets WAL and commits once per migration -- in roughly two seconds each on that same
+    // runner. Seeding this way is also the honest model, because a v60 database Loomrail wrote
+    // would have been built by that same batching path. How the fixture is committed is not under
+    // test; what `openLocalState` then does to it is.
+    database.exec("BEGIN IMMEDIATE");
     for (const migration of migrations.filter(({ version }) => version <= 60)) {
       database.exec(migration.sql);
       migrationLedger.run(migration.version, migration.name, migration.checksum, now);
     }
+    database.exec("COMMIT");
 
     database
       .prepare("INSERT INTO workspaces (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)")
