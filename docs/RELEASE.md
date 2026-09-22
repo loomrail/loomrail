@@ -199,27 +199,30 @@ exact version and invocation contract inside the selected support target. The cu
 only the committed macOS arm64 rows for Codex CLI and Claude Code CLI. There is no matching Windows live execution
 evidence, so Windows dispatch and a future Windows-inclusive support target remain blocked.
 
-### Current candidate
-
-`0.2.0` is the coordinator candidate for `MACOS_ARM64`, and a minor rather than patch version because it adds an
-opt-in execution mode `0.1.3` did not have. It preserves all six stages, independent Review, measured verification
-and Browser QA, final owner Acceptance, audit, permissions and recovery. It adds the opt-in code-blind planning
-coordinator, admits the exact Codex CLI `0.155.0-alpha.9.2 / darwin / arm64` execution target, stops a read-only
-Discovery stage from asking for write authority, and narrows session-loop bookkeeping to operational counters.
-See the [candidate notes](releases/0.2.0.md), [ADR-0035](adr/0035-code-blind-coordinator.md) and the
-[coordinator evidence](evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
-
-The coordinator is experimental and opt-in. No token saving or quality non-inferiority is claimed, and the exact
-admission grants nothing to allowance reporting, an adjacent CLI version, another architecture or another platform.
-This release adds no migration: `0062` remains the latest, and stage assignments gain only additive optional fields.
-
-Publishing remains gated on exact-source local, CI and package checks, protected-environment review and separate npm
-approval. Publication must not reuse any earlier candidate's receipt. Before finishing it, inspect the owner's npm
-staging queue and resolve any obsolete candidate: approving an older stage afterwards could move `latest` backwards.
-
 ### Current published Stable release
 
-`0.1.3` is the published repository-readiness patch for `MACOS_ARM64`. It preserves all six stages,
+`0.2.0` is the published `MACOS_ARM64` minor release, and a minor rather than a patch because it adds an opt-in
+execution mode `0.1.3` did not have. It preserves all six stages, independent Review, measured verification and
+Browser QA, final owner Acceptance, audit, permissions and recovery. It adds the opt-in code-blind planning
+coordinator, admits the exact Codex CLI `0.155.0-alpha.9.2 / darwin / arm64` execution target, stops a read-only
+Discovery stage from asking for write authority, and narrows session-loop bookkeeping to operational counters.
+See the [release notes](releases/0.2.0.md), [ADR-0035](adr/0035-code-blind-coordinator.md) and the
+[coordinator evidence](evidence/phase-8/CODE-BLIND-COORDINATOR-EVIDENCE.md).
+
+Exact-source six-job CI, protected staging and separate owner approval completed for source
+`5445157a7350af3e752a453d623f0cd84b80d388`. The CI-built artifact reproduced the local build byte for byte — same
+SHA-256, same 105 files, no per-file difference — and the published registry bytes carry that same shasum. See the
+[release evidence](evidence/phase-8/STABLE-0.2.0-RELEASE-EVIDENCE.md).
+
+The coordinator is experimental and opt-in, and is off by default. No token saving or quality non-inferiority is
+claimed. The exact admission grants nothing to allowance reporting, an adjacent CLI version, another architecture or
+another platform, all of which keep failing closed. This release adds no migration: `0062` remains the latest, and
+stage assignments gain only additive optional fields, so a record the coordinator writes is not promised to be
+readable by an older binary.
+
+### Previous published Stable release
+
+`0.1.3` was the preceding published repository-readiness patch for `MACOS_ARM64`. It preserves all six stages,
 independent Review, measured verification and Browser QA, final owner Acceptance, audit, permissions and recovery.
 The implementation reduces duplicate workspace result delivery and optional context, adds bounded stage context
 and structured upstream checkpoints, and shows cache attribution with honest unknowns. Modeled byte reductions
@@ -234,22 +237,14 @@ The historical compatibility rows stay unchanged. No new CLI version is admitted
 code-blind coordinator in PR #33 is not included. The obsolete `0.1.2` stage was rejected before this publication;
 its [historical receipt](evidence/phase-8/STABLE-0.1.2-CANDIDATE.json) is not evidence for `0.1.3`.
 
-### Previous published Stable release
-
-`0.1.1` was the preceding `MACOS_ARM64` patch release. It added the exact Codex CLI
-`0.154.0-alpha.6.2 / darwin / arm64` admission row after real success/failure recordings and a full production
-workflow, fixes finite Project verification Acceptance when a Plan also contains a supervised `SERVE` recipe, adds a
-repeatable public-registry lifecycle gate and extends the keyboard-first Attention E2E to three Projects. Local
-`pnpm verify`, 65 product E2E scenarios, 7 protected landing scenarios, fault injection, release-package verification
-and the public `0.1.0-beta.1 -> 0.1.1` lifecycle passed. The installed public package then completed a real Recurkit
-workflow through `DONE / SUCCEEDED / ACCEPTED` and preserved that terminal state across a controlled restart.
-
 ### Published channels
 
-The registry serves Stable `0.1.3` through `latest` and keeps `0.1.0-beta.1` through `next`. The current release was
-built from exact source `868be0ee9c2054cefeffda1ecc516c62ec2f8099`; its checks are recorded in the
+The registry serves Stable `0.2.0` through `latest` and keeps `0.1.0-beta.1` through `next`. The current release was
+built from exact source `5445157a7350af3e752a453d623f0cd84b80d388`; its checks are recorded in the
+[0.2.0 release evidence](evidence/phase-8/STABLE-0.2.0-RELEASE-EVIDENCE.md), and the preceding patch's in the
 [0.1.3 release evidence](evidence/phase-8/STABLE-0.1.3-RELEASE-EVIDENCE.md).
-The earlier full accepted provider workflow belongs to `0.1.1`, not to a new paid run for `0.1.3`. Its historical
+The last full accepted provider workflow belongs to `0.1.1`; neither `0.1.3` nor `0.2.0` bought a new paid run for
+that purpose, and the coordinator's own native qualification is recorded separately. Its historical
 proof is recorded in the
 [Stable release evidence](evidence/phase-8/STABLE-0.1.1-RELEASE-EVIDENCE.md) and
 [Stable release notes](releases/0.1.1.md). The historical `0.1.0` proof remains in
